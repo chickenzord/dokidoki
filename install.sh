@@ -45,7 +45,13 @@ CURRENT_HOSTNAME="$(hostname 2>/dev/null || cat /etc/hostname 2>/dev/null || una
 
 # Default configurations
 STACKS_DIR="${DOKIDOKI_STACKS_DIR:-/opt/stacks}"
-PORT="${DOKIDOKI_PORT:-8080}"
+PORT="${DOKIDOKI_PORT:-}"
+PORT_SPECIFIED=false
+if [ -n "$PORT" ]; then
+  PORT_SPECIFIED=true
+else
+  PORT="8080"
+fi
 NODE_NAME="${DOKIDOKI_NODE_NAME:-$CURRENT_HOSTNAME}"
 PEERS="${DOKIDOKI_PEERS:-}"
 CLUSTER_TOKEN="${DOKIDOKI_CLUSTER_TOKEN:-}"
@@ -78,7 +84,7 @@ OPTIONS:
   -i, --interactive            Interactively prompt and configure settings (default)
   -y, --yes, --non-interactive Non-interactive mode (proceed with defaults without prompting)
   -s, --stacks-dir <dir>       Directory for Compose stacks (default: /opt/stacks)
-  -p, --port <port>            Host port to expose Dokidoki on (default: 8080)
+  -p, --port <port>            Port to listen on (default: 8080 or next free port)
   -n, --node-name <name>       Node name for the cluster (default: current hostname '${CURRENT_HOSTNAME}')
       --peers <urls>           Comma-separated bootstrap seed peer URLs
       --token <token>          Cluster security token for authorized peering
@@ -114,6 +120,7 @@ while [[ $# -gt 0 ]]; do
       ;;
     -p|--port)
       PORT="$2"
+      PORT_SPECIFIED=true
       shift 2
       ;;
     -n|--node-name)
@@ -269,6 +276,48 @@ detect_network_interfaces() {
   DEFAULT_IP="${DEFAULT_IP:-127.0.0.1}"
 }
 
+# Helper: check if a TCP port is currently in use
+is_port_in_use() {
+  local port="$1"
+
+  # 1. Pure bash /dev/tcp connection probe (fast, no external tools needed)
+  if (exec 3<>/dev/tcp/127.0.0.1/"$port") 2>/dev/null; then
+    exec 3<&- 2>/dev/null || true
+    exec 3>&- 2>/dev/null || true
+    return 0
+  fi
+
+  # 2. Check with lsof if available
+  if command -v lsof >/dev/null 2>&1; then
+    if lsof -iTCP:"$port" -sTCP:LISTEN -P -n >/dev/null 2>&1; then
+      return 0
+    fi
+  fi
+
+  # 3. Check with ss if available
+  if command -v ss >/dev/null 2>&1; then
+    if ss -tlnH "sport = :$port" 2>/dev/null | grep -q ":$port\b"; then
+      return 0
+    fi
+  fi
+
+  return 1
+}
+
+# Helper: find first available TCP port starting from start_port
+find_free_port() {
+  local start_port="${1:-8080}"
+  local p="$start_port"
+  while [ "$p" -le 65535 ]; do
+    if ! is_port_in_use "$p"; then
+      echo "$p"
+      return 0
+    fi
+    p=$((p + 1))
+  done
+  echo "$start_port"
+}
+
 print_summary() {
   local masked_token="[disabled / open]"
   if [ -n "$CLUSTER_TOKEN" ]; then
@@ -333,11 +382,23 @@ success "Prerequisites satisfied ($COMPOSE_CMD detected)"
 # Detect network interfaces
 detect_network_interfaces
 
+# Auto-detect available port starting at 8080 if not explicitly provided
+if [ "$PORT_SPECIFIED" = false ]; then
+  DETECTED_PORT="$(find_free_port 8080)"
+  if [ "$DETECTED_PORT" != "8080" ]; then
+    info "Port 8080 is in use, auto-selected available port ${DETECTED_PORT}"
+  fi
+  PORT="$DETECTED_PORT"
+fi
+
 # Interactive configuration prompts if enabled
 if [ "$INTERACTIVE" = true ] && [ "$NON_INTERACTIVE" = false ]; then
   info "Interactive Configuration Setup:"
   STACKS_DIR="$(prompt_input "Stacks Directory" "$STACKS_DIR")"
-  PORT="$(prompt_input "Host Port" "$PORT")"
+  PORT="$(prompt_input "Port" "$PORT")"
+  if is_port_in_use "$PORT"; then
+    warn "Port $PORT is currently in use by another process."
+  fi
   NODE_NAME="$(prompt_input "Node Name" "$NODE_NAME")"
 
   echo ""
@@ -394,7 +455,7 @@ success "Directory ready: ${DOKIDOKI_DIR}"
 
 # Build environment entries for compose
 ENV_BLOCK=""
-ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_PORT=8080\n"
+ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_PORT=${PORT}\n"
 ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_STACKS_DIR=/opt/stacks\n"
 ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_NODE_NAME=${NODE_NAME}\n"
 
@@ -426,8 +487,7 @@ services:
     image: ${IMAGE}
     container_name: dokidoki
     restart: unless-stopped
-    ports:
-      - "${PORT}:8080"
+    network_mode: host
     volumes:
       - "${DOCKER_SOCKET}:/var/run/docker.sock"
       - "${STACKS_DIR}:/opt/stacks"

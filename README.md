@@ -50,8 +50,7 @@ services:
     image: ghcr.io/chickenzord/dokidoki:latest
     container_name: dokidoki
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    network_mode: host
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
       - /opt/stacks:/opt/stacks
