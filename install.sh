@@ -338,6 +338,7 @@ print_summary() {
 
   echo ""
   printf "${BOLD}Configuration Summary:${RESET}\n"
+  printf "  ${CYAN}%-18s${RESET}: http://%s:%s\n" "Web UI URL" "${DEFAULT_IP:-localhost}" "$PORT"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Stacks Directory" "$STACKS_DIR"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Host Port" "$PORT"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Node Name" "$NODE_NAME"
@@ -526,13 +527,13 @@ fi
 
 echo "-------------------------------------------------------------"
 printf "${BOLD}Dokidoki Stack Summary:${RESET}\n"
-printf "  ${CYAN}Web Dashboard:${RESET}    http://%s:%s  (or http://localhost:%s)\n" "${DEFAULT_IP:-localhost}" "$PORT" "$PORT"
-printf "  ${CYAN}Node Name:${RESET}        %s\n" "$NODE_NAME"
+printf "  ${CYAN}%-18s${RESET}: http://%s:%s  (or http://localhost:%s)\n" "Web UI URL" "${DEFAULT_IP:-localhost}" "$PORT" "$PORT"
+printf "  ${CYAN}%-18s${RESET}: %s\n" "Node Name" "$NODE_NAME"
 if [ -n "$ADVERTISE_ADDR" ]; then
-  printf "  ${CYAN}Advertised Addr:${RESET}  %s\n" "$ADVERTISE_ADDR"
+  printf "  ${CYAN}%-18s${RESET}: %s\n" "Advertised Addr" "$ADVERTISE_ADDR"
 fi
-printf "  ${CYAN}Stack Path:${RESET}       %s\n" "$COMPOSE_FILE"
-printf "  ${CYAN}Stacks Directory:${RESET} %s\n" "$STACKS_DIR"
+printf "  ${CYAN}%-18s${RESET}: %s\n" "Stack Path" "$COMPOSE_FILE"
+printf "  ${CYAN}%-18s${RESET}: %s\n" "Stacks Directory" "$STACKS_DIR"
 echo "-------------------------------------------------------------"
 printf "${BOLD}Useful Commands:${RESET}\n"
 printf "  View logs:        ${DIM}%s -f %s logs -f${RESET}\n" "$COMPOSE_CMD" "$COMPOSE_FILE"

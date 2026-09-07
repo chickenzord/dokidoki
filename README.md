@@ -6,69 +6,19 @@ Dokidoki monitors Docker Compose stacks on your hosts (`/opt/stacks`), connects 
 
 ---
 
-## Quick Install
+## Quick Start
 
-Run the host installer to set up Dokidoki as a Docker Compose stack (interactive by default):
+Run the installer on each of your Docker hosts:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/chickenzord/dokidoki/main/install.sh | bash
 ```
 
-The installer detects your host network interfaces, recommends the default route IP as candidate advertise address for clustering, and prompts for configuration options before launching.
+The installer automatically detects host network interfaces, suggests a reachable advertise address, and configures the Dokidoki stack.
 
-### Unattended / Non-Interactive Install
+Nodes on the same local network automatically discover each other (via mDNS and peer exchange). Once installed, open the Web UI at `http://<any-host-ip>:8080` from any node to view and manage Compose stacks and containers across all discovered nodes in your cluster.
 
-For automated scripts, CI/CD, or headless provisioning, proceed with defaults without interactive prompts using `-y`:
-
-```bash
-curl -sSL https://raw.githubusercontent.com/chickenzord/dokidoki/main/install.sh | bash -s -- -y
-```
-
-### Installer Options
-
-| Option | Flag | Default | Description |
-| :--- | :--- | :--- | :--- |
-| **Interactive** | `-i, --interactive` | `true` | Interactively prompt and configure settings (default in terminal) |
-| **Non-Interactive** | `-y, --yes, --non-interactive` | `false` | Unattended mode (proceed with defaults/flags without prompts) |
-| **Stacks Directory** | `-s, --stacks-dir <dir>` | `/opt/stacks` | Directory where compose stacks reside |
-| **Port** | `-p, --port <port>` | `8080` | Host port to expose the Web UI and API |
-| **Node Name** | `-n, --node-name <name>` | `$(hostname)` | Identifier for this node in the cluster |
-| **Seed Peers** | `--peers <urls>` | _(none)_ | Comma-separated bootstrap peer URLs |
-| **Cluster Token** | `--token <token>` | _(open)_ | Shared authentication token for the cluster |
-| **Advertise Addr** | `--advertise-addr <urls>` | _(auto host IP)_ | Candidate address(es) reachable by peer nodes |
-| **Disable mDNS** | `--disable-mdns` | `enabled` | Disable local network mDNS peer discovery |
-
----
-
-## Docker Compose
-
-Dokidoki can also be deployed directly using Docker Compose:
-
-```yaml
-services:
-  dokidoki:
-    image: ghcr.io/chickenzord/dokidoki:latest
-    container_name: dokidoki
-    restart: unless-stopped
-    network_mode: host
-    volumes:
-      - /var/run/docker.sock:/var/run/docker.sock
-      - /opt/stacks:/opt/stacks
-    environment:
-      - DOKIDOKI_PORT=8080
-      - DOKIDOKI_STACKS_DIR=/opt/stacks
-      # - DOKIDOKI_NODE_NAME=node-01
-      # - DOKIDOKI_CLUSTER_TOKEN=secret
-      # - DOKIDOKI_PEERS=http://192.168.1.10:8080
-```
-
-Start the stack:
-
-```bash
-docker compose up -d
-```
-
-Once running, access the dashboard at `http://<host-ip>:8080`.
+> For more installation options (unattended mode, manual Docker Compose deployment, custom flags, or cross-network peering), see the [Installation Guide](docs/user/install.md).
 
 ---
 
@@ -91,10 +41,12 @@ Dokidoki is configured via environment variables or command-line flags (flags ta
 | `DOKIDOKI_LOG_FORMAT` | `-log-format` | `text` | Logging output format (`text`, `json`) |
 | `DOCKER_HOST` | `-docker-host` | Local unix socket | Remote Docker daemon endpoint (e.g. `tcp://...`) |
 
+> For in-depth descriptions of all options, logging formats, and precedence rules, see the [Configuration Guide](docs/user/configuration.md).
+
 ---
 
-## Design Documentation
+## Documentation
 
-For details on architecture, clustering, and design decisions, see:
-
-* [Dokidoki System Design](docs/design/system_design.md)
+* [Installation Guide](docs/user/install.md) - Complete installer options, unattended setup, and multi-host peering
+* [Configuration Guide](docs/user/configuration.md) - Detailed runtime settings, clustering flags, and environment variables
+* [Dokidoki System Design](docs/design/system_design.md) - Architecture, clustering, and discovery design
