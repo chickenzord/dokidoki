@@ -13,6 +13,8 @@ const (
 	DefaultPort      = 8080
 	DefaultStacksDir = "/opt/stacks"
 	DefaultNodeName  = "dokidoki-node"
+	DefaultLogLevel  = "info"
+	DefaultLogFormat = "text"
 )
 
 // Config holds runtime configuration settings.
@@ -27,6 +29,8 @@ type Config struct {
 	Peers          []string
 	ClusterToken   string
 	EnableMDNS     bool
+	LogLevel       string
+	LogFormat      string
 }
 
 // Addr returns the host:port string for binding the HTTP server.
@@ -47,6 +51,8 @@ func DefaultConfig() *Config {
 		StacksDir:  DefaultStacksDir,
 		NodeName:   nodeName,
 		EnableMDNS: true,
+		LogLevel:   DefaultLogLevel,
+		LogFormat:  DefaultLogFormat,
 	}
 }
 
@@ -109,6 +115,22 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 		}
 		cfg.EnableMDNS = enableMDNS
 	}
+	if val, ok := envMap["DOKIDOKI_LOG_LEVEL"]; ok && strings.TrimSpace(val) != "" {
+		cfg.LogLevel = strings.TrimSpace(val)
+	}
+	if val, ok := envMap["DOKIDOKI_LOG_FORMAT"]; ok && strings.TrimSpace(val) != "" {
+		cfg.LogFormat = strings.TrimSpace(val)
+	}
+	if val, ok := envMap["DOKIDOKI_VERBOSE"]; ok && strings.TrimSpace(val) != "" {
+		if v, err := strconv.ParseBool(strings.TrimSpace(val)); err == nil && v {
+			cfg.LogLevel = "debug"
+		}
+	}
+	if val, ok := envMap["DOKIDOKI_DEBUG"]; ok && strings.TrimSpace(val) != "" {
+		if v, err := strconv.ParseBool(strings.TrimSpace(val)); err == nil && v {
+			cfg.LogLevel = "debug"
+		}
+	}
 
 	// CLI flags override environment variables and defaults
 	fs := flag.NewFlagSet("dokidoki", flag.ContinueOnError)
@@ -121,13 +143,24 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 
 	var advertiseAddrFlag string
 	var peersFlag string
+	var verboseFlag bool
+	var debugFlag bool
 	fs.StringVar(&advertiseAddrFlag, "advertise-addr", strings.Join(cfg.AdvertiseAddrs, ","), "Comma-separated advertised addresses")
 	fs.StringVar(&peersFlag, "peers", strings.Join(cfg.Peers, ","), "Comma-separated seed peers")
 	fs.StringVar(&cfg.ClusterToken, "cluster-token", cfg.ClusterToken, "Cluster security authentication token")
 	fs.BoolVar(&cfg.EnableMDNS, "enable-mdns", cfg.EnableMDNS, "Enable LAN mDNS discovery")
+	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Logging verbosity level (debug, info, warn, error)")
+	fs.StringVar(&cfg.LogFormat, "log-format", cfg.LogFormat, "Log output format (text, json)")
+	fs.BoolVar(&verboseFlag, "verbose", false, "Enable verbose/debug logging")
+	fs.BoolVar(&verboseFlag, "v", false, "Enable verbose/debug logging (shorthand)")
+	fs.BoolVar(&debugFlag, "debug", false, "Enable debug logging")
 
 	if err := fs.Parse(args); err != nil {
 		return nil, err
+	}
+
+	if verboseFlag || debugFlag {
+		cfg.LogLevel = "debug"
 	}
 
 	fs.Visit(func(f *flag.Flag) {

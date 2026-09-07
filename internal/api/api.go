@@ -52,7 +52,7 @@ func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
 
 	// Setup middleware
-	r.Use(chiMiddleware.Logger)
+	r.Use(HTTPLogger())
 	r.Use(chiMiddleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},

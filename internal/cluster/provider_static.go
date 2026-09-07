@@ -4,12 +4,11 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chickenzord/dokidoki/internal/logger"
 )
 
 // StaticProvider discovers peers from configured bootstrap URLs.
@@ -175,5 +174,5 @@ func (p *StaticProvider) probe(baseURL string, events chan<- PeerEvent) {
 		}
 	}
 
-	logger.Debugf("Cluster: static handshake succeeded with %s (%s)", baseURL, hsResp.NodeID)
+	slog.Debug("Cluster: static handshake succeeded", "url", baseURL, "node_id", hsResp.NodeID)
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"flag"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -31,21 +32,28 @@ func main() {
 		if errors.Is(err, flag.ErrHelp) {
 			os.Exit(0)
 		}
-		logger.Errorf("Failed to load configuration: %v", err)
+		slog.Error("Failed to load configuration", "error", err)
 		os.Exit(1)
 	}
+
+	logLevel, err := logger.ParseLevel(cfg.LogLevel)
+	if err != nil {
+		slog.Warn("Invalid log level, defaulting to info", "level", cfg.LogLevel, "error", err)
+		logLevel = slog.LevelInfo
+	}
+	logger.Setup(os.Stdout, logLevel, cfg.LogFormat, true)
 
 	// Resolve node ID and candidate addresses
 	nodeID, err := cluster.ResolveNodeID(cfg.NodeID, cfg.StacksDir)
 	if err != nil {
-		logger.Errorf("Failed to resolve node ID: %v", err)
+		slog.Error("Failed to resolve node ID", "error", err)
 		os.Exit(1)
 	}
 
 	candidateAddrs := cluster.DetectCandidateAddresses(cfg.Bind, cfg.Port, cfg.AdvertiseAddrs)
 
 	// Log startup and configuration
-	logger.Infof("Starting Dokidoki v%s", version)
+	slog.Info("Starting Dokidoki", "version", version)
 
 	dockerHostVal := cfg.DockerHost
 	if dockerHostVal == "" {
@@ -70,13 +78,15 @@ func main() {
 		{Key: "mDNS Status", Value: mDNSVal},
 		{Key: "Advertised Addrs", Value: strings.Join(candidateAddrs, ", ")},
 		{Key: "Seed Peers", Value: seedPeersVal},
+		{Key: "Log Level", Value: logLevel.String()},
+		{Key: "Log Format", Value: cfg.LogFormat},
 	}
 	logger.PrintConfig("Configuration:", configItems)
 
 	// Initialize Docker client
 	dockerCli, err := docker.New(cfg.DockerHost)
 	if err != nil {
-		logger.Errorf("Failed to initialize Docker client: %v", err)
+		slog.Error("Failed to initialize Docker client", "error", err)
 		os.Exit(1)
 	}
 	defer dockerCli.Close()
@@ -88,9 +98,9 @@ func main() {
 		if len(shortSelfID) > 12 {
 			shortSelfID = shortSelfID[:12]
 		}
-		logger.Infof("Running inside Docker container: %s", shortSelfID)
+		slog.Info("Running inside Docker container", "container_id", shortSelfID)
 	} else {
-		logger.Infof("Running on host (bare-metal, not containerized)")
+		slog.Info("Running on host (bare-metal, not containerized)")
 	}
 
 	// Initialize Cluster Manager
@@ -137,7 +147,7 @@ func main() {
 
 	serverErr := make(chan error, 1)
 	go func() {
-		logger.Infof("Listening on http://%s", cfg.Addr())
+		slog.Info("Listening", "addr", cfg.Addr())
 		if err := server.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
 			serverErr <- err
 		}
@@ -145,9 +155,9 @@ func main() {
 
 	select {
 	case err := <-serverErr:
-		logger.Errorf("Server failed to start or run: %v", err)
+		slog.Error("Server failed to start or run", "error", err)
 	case sig := <-quit:
-		logger.Infof("Received signal %v, initiating graceful shutdown...", sig)
+		slog.Info("Received signal, initiating graceful shutdown...", "signal", sig)
 	}
 
 	// Graceful HTTP server shutdown
@@ -155,16 +165,16 @@ func main() {
 	defer shutdownCancel()
 
 	if err := server.Shutdown(shutdownCtx); err != nil {
-		logger.Errorf("HTTP server forced to shutdown: %v", err)
+		slog.Error("HTTP server forced to shutdown", "error", err)
 	} else {
-		logger.Info("HTTP server shut down cleanly")
+		slog.Info("HTTP server shut down cleanly")
 	}
 
 	// Stop cluster manager (which sends leave messages to peers)
-	logger.Info("Stopping cluster manager...")
+	slog.Info("Stopping cluster manager...")
 	if err := clusterManager.Stop(shutdownCtx); err != nil {
-		logger.Warnf("Cluster manager stop error: %v", err)
+		slog.Warn("Cluster manager stop error", "error", err)
 	}
 
-	logger.Info("Dokidoki exited")
+	slog.Info("Dokidoki exited")
 }

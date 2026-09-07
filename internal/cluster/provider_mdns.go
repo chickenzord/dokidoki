@@ -5,12 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chickenzord/dokidoki/internal/logger"
 
 	"github.com/grandcat/zeroconf"
 )
@@ -75,7 +74,7 @@ func (p *MDNSProvider) Start(ctx context.Context, events chan<- PeerEvent) error
 		nil,
 	)
 	if err != nil {
-		logger.Warnf("Cluster: mDNS registration failed (will still attempt browsing): %v", err)
+		slog.Warn("Cluster: mDNS registration failed (will still attempt browsing)", "error", err)
 	} else {
 		p.mu.Lock()
 		p.server = server
@@ -96,7 +95,7 @@ func (p *MDNSProvider) Start(ctx context.Context, events chan<- PeerEvent) error
 	go func() {
 		defer p.wg.Done()
 		if err := resolver.Browse(p.ctx, mDNSService, mDNSDomain, entries); err != nil {
-			logger.Debugf("Cluster: mDNS browse ended: %v", err)
+			slog.Debug("Cluster: mDNS browse ended", "error", err)
 		}
 	}()
 

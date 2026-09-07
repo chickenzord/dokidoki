@@ -88,6 +88,8 @@ Dokidoki is configured via environment variables or command-line flags (flags ta
 | `DOKIDOKI_PEERS` | `-peers` | `""` | Comma-separated list of bootstrap seed peers |
 | `DOKIDOKI_ADVERTISE_ADDR` | `-advertise-addr`| `""` | Comma-separated candidate addresses to advertise |
 | `DOKIDOKI_ENABLE_MDNS` | `-enable-mdns` | `true` | Enable LAN multicast DNS peer discovery |
+| `DOKIDOKI_LOG_LEVEL` | `-log-level` | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
+| `DOKIDOKI_LOG_FORMAT` | `-log-format` | `text` | Logging output format (`text`, `json`) |
 | `DOCKER_HOST` | `-docker-host` | Local unix socket | Remote Docker daemon endpoint (e.g. `tcp://...`) |
 
 ---

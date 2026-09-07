@@ -5,13 +5,12 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"sort"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chickenzord/dokidoki/internal/logger"
 )
 
 // Cluster errors.
@@ -69,10 +68,10 @@ func NewManager(self Node, clusterToken string, ttl time.Duration, httpClient *h
 				peers[nodeCopy.ID] = &nodeCopy
 			}
 			if len(peers) > 0 {
-				logger.Infof("Cluster: loaded %d persisted peer(s) from %s", len(peers), NodesFilePath(stacksDir))
+				slog.Info("Cluster: loaded persisted peer(s)", "count", len(peers), "path", NodesFilePath(stacksDir))
 			}
 		} else {
-			logger.Warnf("Cluster: failed to load persisted nodes: %v", err)
+			slog.Warn("Cluster: failed to load persisted nodes", "error", err)
 		}
 	}
 
@@ -163,7 +162,7 @@ func (m *Manager) Start(ctx context.Context) {
 	for _, p := range providers {
 		prov := p
 		if err := prov.Start(m.ctx, events); err != nil {
-			logger.Warnf("Cluster: provider %s failed to start: %v", prov.Name(), err)
+			slog.Warn("Cluster: provider failed to start", "provider", prov.Name(), "error", err)
 		}
 	}
 
@@ -318,7 +317,7 @@ func (m *Manager) Stop(ctx context.Context) error {
 
 	for _, p := range providers {
 		if err := p.Stop(); err != nil {
-			logger.Warnf("Cluster: error stopping provider %s: %v", p.Name(), err)
+			slog.Warn("Cluster: error stopping provider", "provider", p.Name(), "error", err)
 		}
 	}
 
@@ -467,6 +466,8 @@ func (m *Manager) HandleHeartbeat(msg HeartbeatMessage) error {
 		return nil
 	}
 
+	slog.Debug("Cluster: received heartbeat", "node_id", msg.NodeID, "addresses", msg.Addresses)
+
 	m.mu.Lock()
 	changed := false
 	var addrs []string
@@ -591,7 +592,7 @@ func (m *Manager) savePeers(snapshot []Node) {
 	defer m.persistMu.Unlock()
 
 	if err := SavePersistedNodes(m.stacksDir, snapshot); err != nil {
-		logger.Warnf("Cluster: failed to persist discovered nodes: %v", err)
+		slog.Warn("Cluster: failed to persist discovered nodes", "error", err)
 	}
 }
 

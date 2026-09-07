@@ -41,6 +41,12 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.EnableMDNS {
 		t.Errorf("expected EnableMDNS true, got false")
 	}
+	if cfg.LogLevel != "info" {
+		t.Errorf("expected LogLevel info, got %s", cfg.LogLevel)
+	}
+	if cfg.LogFormat != "text" {
+		t.Errorf("expected LogFormat text, got %s", cfg.LogFormat)
+	}
 	if cfg.Addr() != "0.0.0.0:8080" {
 		t.Errorf("expected Addr 0.0.0.0:8080, got %s", cfg.Addr())
 	}
@@ -58,6 +64,7 @@ func TestEnvOverride(t *testing.T) {
 		"DOKIDOKI_PEERS=http://192.168.1.50:8080,http://192.168.1.51:8080",
 		"DOKIDOKI_CLUSTER_TOKEN=secret-cluster-token",
 		"DOKIDOKI_ENABLE_MDNS=false",
+		"DOKIDOKI_LOG_LEVEL=debug",
 	}
 
 	cfg, err := LoadFrom([]string{}, env)
@@ -97,6 +104,9 @@ func TestEnvOverride(t *testing.T) {
 	if cfg.EnableMDNS != false {
 		t.Errorf("expected EnableMDNS false, got true")
 	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug, got %s", cfg.LogLevel)
+	}
 }
 
 func TestFlagsOverrideEnv(t *testing.T) {
@@ -111,6 +121,7 @@ func TestFlagsOverrideEnv(t *testing.T) {
 		"DOKIDOKI_PEERS=http://env-peer:8080",
 		"DOKIDOKI_CLUSTER_TOKEN=env-token",
 		"DOKIDOKI_ENABLE_MDNS=false",
+		"DOKIDOKI_LOG_LEVEL=info",
 	}
 
 	args := []string{
@@ -124,6 +135,7 @@ func TestFlagsOverrideEnv(t *testing.T) {
 		"-peers=http://flag-peer-1:8080, http://flag-peer-2:8080",
 		"-cluster-token=flag-token",
 		"-enable-mdns=true",
+		"-log-level=warn",
 	}
 
 	cfg, err := LoadFrom(args, env)
@@ -162,6 +174,74 @@ func TestFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.EnableMDNS != true {
 		t.Errorf("expected EnableMDNS true, got false")
+	}
+	if cfg.LogLevel != "warn" {
+		t.Errorf("expected LogLevel warn, got %s", cfg.LogLevel)
+	}
+}
+
+func TestLogLevelFlagsAndEnv(t *testing.T) {
+	// 1. -verbose flag
+	cfg, err := LoadFrom([]string{"-verbose"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug with -verbose, got %s", cfg.LogLevel)
+	}
+
+	// 2. -v shorthand flag
+	cfg, err = LoadFrom([]string{"-v"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug with -v, got %s", cfg.LogLevel)
+	}
+
+	// 3. -debug flag
+	cfg, err = LoadFrom([]string{"-debug"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug with -debug, got %s", cfg.LogLevel)
+	}
+
+	// 4. DOKIDOKI_VERBOSE env
+	cfg, err = LoadFrom(nil, []string{"DOKIDOKI_VERBOSE=true"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug with DOKIDOKI_VERBOSE=true, got %s", cfg.LogLevel)
+	}
+
+	// 5. DOKIDOKI_DEBUG env
+	cfg, err = LoadFrom(nil, []string{"DOKIDOKI_DEBUG=1"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogLevel != "debug" {
+		t.Errorf("expected LogLevel debug with DOKIDOKI_DEBUG=1, got %s", cfg.LogLevel)
+	}
+
+	// 6. -log-format flag
+	cfg, err = LoadFrom([]string{"-log-format=json"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("expected LogFormat json with -log-format=json, got %s", cfg.LogFormat)
+	}
+
+	// 7. DOKIDOKI_LOG_FORMAT env
+	cfg, err = LoadFrom(nil, []string{"DOKIDOKI_LOG_FORMAT=json"})
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if cfg.LogFormat != "json" {
+		t.Errorf("expected LogFormat json with DOKIDOKI_LOG_FORMAT=json, got %s", cfg.LogFormat)
 	}
 }
 

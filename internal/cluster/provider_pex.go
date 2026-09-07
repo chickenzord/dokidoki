@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -162,6 +163,7 @@ func (p *PEXProvider) sendHeartbeats(events chan<- PeerEvent) {
 
 				resp, err := p.client.Do(req)
 				if err != nil {
+					slog.Debug("Cluster: heartbeat failed", "peer_id", targetPeer.ID, "target", target, "error", err)
 					reqCancel()
 					continue
 				}
@@ -169,6 +171,7 @@ func (p *PEXProvider) sendHeartbeats(events chan<- PeerEvent) {
 				reqCancel()
 
 				if resp.StatusCode == http.StatusOK {
+					slog.Debug("Cluster: heartbeat succeeded", "peer_id", targetPeer.ID, "target", target)
 					select {
 					case events <- PeerEvent{
 						Type:      EventUpdated,
@@ -179,6 +182,8 @@ func (p *PEXProvider) sendHeartbeats(events chan<- PeerEvent) {
 					case <-p.ctx.Done():
 					}
 					break
+				} else {
+					slog.Debug("Cluster: heartbeat returned non-200 status", "peer_id", targetPeer.ID, "target", target, "status", resp.StatusCode)
 				}
 			}
 		}(peerNode)

@@ -5,16 +5,19 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
+	"github.com/chickenzord/dokidoki/internal/logger"
 	"github.com/chickenzord/dokidoki/internal/stack"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -937,5 +940,62 @@ func TestWebUIHandler(t *testing.T) {
 		t.Fatalf("expected 404, not web UI SPA fallback for /api/v1 routes")
 	}
 }
+
+func TestHeartbeatLogDebugLevel(t *testing.T) {
+	var buf bytes.Buffer
+	lvlVar := &slog.LevelVar{}
+	lvlVar.Set(slog.LevelInfo)
+	logger.Setup(&buf, lvlVar, "text", false)
+	defer logger.Setup(os.Stdout, slog.LevelInfo, "text", true)
+
+	handler, _ := setupClusterTestServer(t, "")
+
+	hbMsg := cluster.HeartbeatMessage{
+		NodeID:    "node-remote-hb",
+		Addresses: []string{"http://10.0.0.9:8080"},
+	}
+	body, _ := json.Marshal(hbMsg)
+
+	// 1. With LevelInfo (default), heartbeat request should NOT be logged
+	lvlVar.Set(slog.LevelInfo)
+	buf.Reset()
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/heartbeat", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if strings.Contains(buf.String(), "/api/v1/cluster/heartbeat") {
+		t.Errorf("heartbeat was logged at info level: %q", buf.String())
+	}
+
+	// Non-heartbeat request should be logged at info level
+	buf.Reset()
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if !strings.Contains(buf.String(), "[INFO]") || !strings.Contains(buf.String(), "/api/v1/nodes") {
+		t.Errorf("expected non-heartbeat request to be logged at info level, got: %q", buf.String())
+	}
+
+	// 2. With LevelDebug, heartbeat request SHOULD be logged at debug level
+	lvlVar.Set(slog.LevelDebug)
+	buf.Reset()
+
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/heartbeat", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(buf.String(), "[DEBUG]") || !strings.Contains(buf.String(), "/api/v1/cluster/heartbeat") {
+		t.Errorf("expected heartbeat to be logged at debug level, got: %q", buf.String())
+	}
+}
+
 
 

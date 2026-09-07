@@ -1,11 +1,11 @@
 package cluster
 
 import (
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
 
-	"github.com/chickenzord/dokidoki/internal/logger"
 	"github.com/google/uuid"
 )
 
@@ -38,12 +38,12 @@ func ResolveNodeID(configuredID, stacksDir string) (string, error) {
 	generatedID := uuid.NewString()
 
 	if err := os.MkdirAll(targetDir, 0755); err != nil {
-		logger.Warnf("Failed to create directory for node ID %s: %v", targetDir, err)
+		slog.Warn("Failed to create directory for node ID", "dir", targetDir, "error", err)
 		return generatedID, nil
 	}
 
 	if err := os.WriteFile(targetFile, []byte(generatedID+"\n"), 0644); err != nil {
-		logger.Warnf("Failed to write node ID to %s: %v", targetFile, err)
+		slog.Warn("Failed to write node ID", "file", targetFile, "error", err)
 		return generatedID, nil
 	}
 

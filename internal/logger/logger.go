@@ -1,8 +1,10 @@
 package logger
 
 import (
+	"context"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"reflect"
 	"sort"
@@ -23,129 +25,177 @@ const (
 	ColorCyan   = "\033[36m"
 )
 
+// ParseLevel parses a level string into a slog.Level.
+// Accepts "debug", "verbose", "info", "warn", "warning", "error" (case-insensitive).
+func ParseLevel(s string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(s)) {
+	case "debug", "verbose":
+		return slog.LevelDebug, nil
+	case "info", "":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return slog.LevelInfo, fmt.Errorf("unknown log level: %q", s)
+	}
+}
+
+// ConsoleHandler implements slog.Handler for readable, colored terminal output.
+type ConsoleHandler struct {
+	mu          sync.Mutex
+	out         io.Writer
+	level       slog.Leveler
+	enableColor bool
+	attrs       []slog.Attr
+	groups      []string
+}
+
+// NewConsoleHandler creates a new ConsoleHandler.
+func NewConsoleHandler(out io.Writer, level slog.Leveler, enableColor bool) *ConsoleHandler {
+	if out == nil {
+		out = os.Stdout
+	}
+	if level == nil {
+		level = slog.LevelInfo
+	}
+	return &ConsoleHandler{
+		out:         out,
+		level:       level,
+		enableColor: enableColor,
+	}
+}
+
+// Enabled reports whether the handler emits log records at the given level.
+func (h *ConsoleHandler) Enabled(_ context.Context, level slog.Level) bool {
+	minLevel := slog.LevelInfo
+	if h.level != nil {
+		minLevel = h.level.Level()
+	}
+	return level >= minLevel
+}
+
+// Handle formats and writes the slog.Record to the output writer.
+func (h *ConsoleHandler) Handle(_ context.Context, r slog.Record) error {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	ts := r.Time.Format("2006-01-02 15:04:05")
+	if r.Time.IsZero() {
+		ts = time.Now().Format("2006-01-02 15:04:05")
+	}
+
+	var levelTag, color string
+	switch {
+	case r.Level >= slog.LevelError:
+		levelTag = "[ERROR]"
+		color = ColorRed
+	case r.Level >= slog.LevelWarn:
+		levelTag = "[WARN]"
+		color = ColorYellow
+	case r.Level >= slog.LevelInfo:
+		levelTag = "[INFO]"
+		color = ColorCyan
+	default:
+		levelTag = "[DEBUG]"
+		color = ColorGray
+	}
+
+	var sb strings.Builder
+	if h.enableColor {
+		sb.WriteString(ColorGray)
+		sb.WriteString(ts)
+		sb.WriteString(ColorReset)
+		sb.WriteString(" ")
+		sb.WriteString(color)
+		sb.WriteString(levelTag)
+		sb.WriteString(ColorReset)
+		sb.WriteString(" ")
+		sb.WriteString(r.Message)
+	} else {
+		sb.WriteString(ts)
+		sb.WriteString(" ")
+		sb.WriteString(levelTag)
+		sb.WriteString(" ")
+		sb.WriteString(r.Message)
+	}
+
+	for _, a := range h.attrs {
+		appendAttr(&sb, a, h.groups, h.enableColor)
+	}
+
+	r.Attrs(func(a slog.Attr) bool {
+		appendAttr(&sb, a, h.groups, h.enableColor)
+		return true
+	})
+
+	sb.WriteString("\n")
+	_, err := fmt.Fprint(h.out, sb.String())
+	return err
+}
+
+func appendAttr(sb *strings.Builder, a slog.Attr, groups []string, enableColor bool) {
+	if a.Equal(slog.Attr{}) {
+		return
+	}
+	sb.WriteString(" ")
+	key := a.Key
+	if len(groups) > 0 {
+		key = strings.Join(groups, ".") + "." + key
+	}
+	if enableColor {
+		sb.WriteString(ColorCyan)
+		sb.WriteString(key)
+		sb.WriteString(ColorReset)
+		sb.WriteString("=")
+		sb.WriteString(fmt.Sprint(a.Value.Any()))
+	} else {
+		sb.WriteString(key)
+		sb.WriteString("=")
+		sb.WriteString(fmt.Sprint(a.Value.Any()))
+	}
+}
+
+// WithAttrs returns a new Handler with the given attributes added.
+func (h *ConsoleHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
+	h2 := *h
+	h2.attrs = append(append([]slog.Attr(nil), h.attrs...), attrs...)
+	return &h2
+}
+
+// WithGroup returns a new Handler with the given group appended.
+func (h *ConsoleHandler) WithGroup(name string) slog.Handler {
+	if name == "" {
+		return h
+	}
+	h2 := *h
+	h2.groups = append(append([]string(nil), h.groups...), name)
+	return &h2
+}
+
+// Setup configures and sets the default slog logger based on level, format, and color preference.
+func Setup(out io.Writer, level slog.Leveler, format string, enableColor bool) *slog.Logger {
+	if out == nil {
+		out = os.Stdout
+	}
+	var handler slog.Handler
+	if strings.ToLower(strings.TrimSpace(format)) == "json" {
+		handler = slog.NewJSONHandler(out, &slog.HandlerOptions{Level: level})
+	} else {
+		handler = NewConsoleHandler(out, level, enableColor)
+	}
+	l := slog.New(handler)
+	slog.SetDefault(l)
+	return l
+}
+
 // ConfigItem represents a single key-value configuration setting.
 type ConfigItem struct {
 	Key       string
 	Value     any
 	Sensitive bool
 }
-
-// Logger provides ANSI colored leveled logging and configuration formatting.
-type Logger struct {
-	mu          sync.Mutex
-	out         io.Writer
-	enableColor bool
-}
-
-var (
-	defaultLogger = New(os.Stdout)
-)
-
-// New creates a new Logger writing to the specified writer.
-func New(out io.Writer) *Logger {
-	if out == nil {
-		out = os.Stdout
-	}
-	return &Logger{
-		out:         out,
-		enableColor: true,
-	}
-}
-
-// SetOutput changes the destination writer for the default logger.
-func SetOutput(w io.Writer) {
-	defaultLogger.SetOutput(w)
-}
-
-// SetColor enables or disables ANSI color output on the default logger.
-func SetColor(enabled bool) {
-	defaultLogger.SetColor(enabled)
-}
-
-// SetOutput changes the destination writer.
-func (l *Logger) SetOutput(w io.Writer) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.out = w
-}
-
-// SetColor enables or disables ANSI color output.
-func (l *Logger) SetColor(enabled bool) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	l.enableColor = enabled
-}
-
-func (l *Logger) log(levelTag, color, msg string) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-
-	ts := time.Now().Format("2006-01-02 15:04:05")
-
-	var line string
-	if l.enableColor {
-		line = fmt.Sprintf("%s%s%s %s%s%s %s\n",
-			ColorGray, ts, ColorReset,
-			color, levelTag, ColorReset,
-			msg,
-		)
-	} else {
-		line = fmt.Sprintf("%s %s %s\n", ts, levelTag, msg)
-	}
-
-	fmt.Fprint(l.out, line)
-}
-
-// Info logs an informational message in cyan.
-func (l *Logger) Info(args ...any) {
-	l.log("[INFO]", ColorCyan, fmt.Sprint(args...))
-}
-
-// Infof logs a formatted informational message in cyan.
-func (l *Logger) Infof(format string, args ...any) {
-	l.log("[INFO]", ColorCyan, fmt.Sprintf(format, args...))
-}
-
-// Warn logs a warning message in yellow.
-func (l *Logger) Warn(args ...any) {
-	l.log("[WARN]", ColorYellow, fmt.Sprint(args...))
-}
-
-// Warnf logs a formatted warning message in yellow.
-func (l *Logger) Warnf(format string, args ...any) {
-	l.log("[WARN]", ColorYellow, fmt.Sprintf(format, args...))
-}
-
-// Error logs an error message in red.
-func (l *Logger) Error(args ...any) {
-	l.log("[ERROR]", ColorRed, fmt.Sprint(args...))
-}
-
-// Errorf logs a formatted error message in red.
-func (l *Logger) Errorf(format string, args ...any) {
-	l.log("[ERROR]", ColorRed, fmt.Sprintf(format, args...))
-}
-
-// Debug logs a debug message in dim/gray.
-func (l *Logger) Debug(args ...any) {
-	l.log("[DEBUG]", ColorGray, fmt.Sprint(args...))
-}
-
-// Debugf logs a formatted debug message in dim/gray.
-func (l *Logger) Debugf(format string, args ...any) {
-	l.log("[DEBUG]", ColorGray, fmt.Sprintf(format, args...))
-}
-
-// Package-level functions delegating to defaultLogger.
-
-func Info(args ...any)                  { defaultLogger.Info(args...) }
-func Infof(format string, args ...any)  { defaultLogger.Infof(format, args...) }
-func Warn(args ...any)                  { defaultLogger.Warn(args...) }
-func Warnf(format string, args ...any)  { defaultLogger.Warnf(format, args...) }
-func Error(args ...any)                 { defaultLogger.Error(args...) }
-func Errorf(format string, args ...any) { defaultLogger.Errorf(format, args...) }
-func Debug(args ...any)                 { defaultLogger.Debug(args...) }
-func Debugf(format string, args ...any) { defaultLogger.Debugf(format, args...) }
 
 // IsSensitiveKey checks if a key name suggests sensitive content.
 func IsSensitiveKey(key string) bool {
@@ -186,7 +236,7 @@ func MaskValue(val any) (string, bool) {
 }
 
 // FormatConfig returns a clean ANSI aligned plain-text representation of configuration settings.
-func (l *Logger) FormatConfig(title string, items []ConfigItem) string {
+func FormatConfig(title string, items []ConfigItem, enableColor bool) string {
 	if len(items) == 0 {
 		return ""
 	}
@@ -200,7 +250,7 @@ func (l *Logger) FormatConfig(title string, items []ConfigItem) string {
 
 	var sb strings.Builder
 	if title != "" {
-		if l.enableColor {
+		if enableColor {
 			sb.WriteString(fmt.Sprintf("%s%s%s\n", ColorBold, title, ColorReset))
 		} else {
 			sb.WriteString(title + "\n")
@@ -219,7 +269,7 @@ func (l *Logger) FormatConfig(title string, items []ConfigItem) string {
 			valStr = fmt.Sprintf("%v", it.Value)
 		}
 
-		if l.enableColor {
+		if enableColor {
 			var coloredVal string
 			if isSens {
 				if isConfigured {
@@ -244,48 +294,10 @@ func (l *Logger) FormatConfig(title string, items []ConfigItem) string {
 	return sb.String()
 }
 
-// PrintConfig formats and writes configuration items to the logger output.
-func (l *Logger) PrintConfig(args ...any) {
-	title := "Configuration:"
-	var items []ConfigItem
-
-	if len(args) == 1 {
-		switch v := args[0].(type) {
-		case []ConfigItem:
-			items = v
-		case map[string]any:
-			items = MapToConfigItems(v)
-		default:
-			items = StructToConfigItems(v)
-		}
-	} else if len(args) >= 2 {
-		if t, ok := args[0].(string); ok {
-			title = t
-		}
-		switch v := args[1].(type) {
-		case []ConfigItem:
-			items = v
-		case map[string]any:
-			items = MapToConfigItems(v)
-		default:
-			items = StructToConfigItems(v)
-		}
-	}
-
-	out := l.FormatConfig(title, items)
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	fmt.Fprint(l.out, out)
-}
-
-// Package-level FormatConfig delegating to defaultLogger.
-func FormatConfig(title string, items []ConfigItem) string {
-	return defaultLogger.FormatConfig(title, items)
-}
-
-// Package-level PrintConfig delegating to defaultLogger.
-func PrintConfig(args ...any) {
-	defaultLogger.PrintConfig(args...)
+// PrintConfig formats and writes configuration items to stdout.
+func PrintConfig(title string, items []ConfigItem) {
+	out := FormatConfig(title, items, true)
+	fmt.Print(out)
 }
 
 // MapToConfigItems converts a map to sorted ConfigItem slice.

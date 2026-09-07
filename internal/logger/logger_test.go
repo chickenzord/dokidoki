@@ -2,6 +2,7 @@ package logger
 
 import (
 	"bytes"
+	"log/slog"
 	"strings"
 	"testing"
 )
@@ -14,10 +15,10 @@ type sampleConfig struct {
 	Password     string
 }
 
-func TestLoggerLevels(t *testing.T) {
+func TestConsoleHandlerLevels(t *testing.T) {
 	var buf bytes.Buffer
-	l := New(&buf)
-	l.SetColor(true)
+	h := NewConsoleHandler(&buf, slog.LevelDebug, true)
+	l := slog.New(h)
 
 	l.Info("info message")
 	l.Warn("warn message")
@@ -45,11 +46,115 @@ func TestLoggerLevels(t *testing.T) {
 	}
 }
 
-func TestPrintConfigMasking(t *testing.T) {
+func TestConsoleHandlerFiltering(t *testing.T) {
 	var buf bytes.Buffer
-	l := New(&buf)
-	l.SetColor(false) // test plain text alignment and masking
+	lvlVar := &slog.LevelVar{}
+	lvlVar.Set(slog.LevelInfo)
+	h := NewConsoleHandler(&buf, lvlVar, false)
+	l := slog.New(h)
 
+	// LevelInfo: Debug should be suppressed
+	l.Debug("debug hidden")
+	l.Info("info visible")
+	if strings.Contains(buf.String(), "debug hidden") {
+		t.Errorf("expected debug to be suppressed at LevelInfo, got: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "info visible") {
+		t.Errorf("expected info to be visible at LevelInfo, got: %q", buf.String())
+	}
+
+	// Set to LevelWarn: Info should be suppressed
+	buf.Reset()
+	lvlVar.Set(slog.LevelWarn)
+	l.Info("info hidden")
+	l.Warn("warn visible")
+	l.Error("error visible")
+	if strings.Contains(buf.String(), "info hidden") {
+		t.Errorf("expected info to be suppressed at LevelWarn, got: %q", buf.String())
+	}
+	if !strings.Contains(buf.String(), "warn visible") || !strings.Contains(buf.String(), "error visible") {
+		t.Errorf("expected warn and error to be visible at LevelWarn, got: %q", buf.String())
+	}
+
+	// Set to LevelDebug: Debug should be visible
+	buf.Reset()
+	lvlVar.Set(slog.LevelDebug)
+	l.Debug("debug visible")
+	if !strings.Contains(buf.String(), "debug visible") {
+		t.Errorf("expected debug to be visible at LevelDebug, got: %q", buf.String())
+	}
+}
+
+func TestConsoleHandlerAttrsAndGroups(t *testing.T) {
+	var buf bytes.Buffer
+	h := NewConsoleHandler(&buf, slog.LevelDebug, false)
+	h = h.WithGroup("cluster").WithAttrs([]slog.Attr{slog.String("region", "us-east")}).(*ConsoleHandler)
+	l := slog.New(h)
+
+	l.Info("node connected", "node_id", "node-1")
+	out := buf.String()
+
+	if !strings.Contains(out, "cluster.region=us-east") {
+		t.Errorf("expected cluster.region=us-east in %q", out)
+	}
+	if !strings.Contains(out, "cluster.node_id=node-1") {
+		t.Errorf("expected cluster.node_id=node-1 in %q", out)
+	}
+}
+
+func TestSetup(t *testing.T) {
+	var buf bytes.Buffer
+
+	// Text/Console setup
+	l := Setup(&buf, slog.LevelInfo, "text", false)
+	if l == nil {
+		t.Fatal("expected non-nil logger from Setup")
+	}
+	slog.Info("test global slog info")
+	if !strings.Contains(buf.String(), "test global slog info") {
+		t.Errorf("expected log output from global slog: %q", buf.String())
+	}
+
+	// JSON setup
+	buf.Reset()
+	Setup(&buf, slog.LevelInfo, "json", false)
+	slog.Info("test json slog", "key", "val")
+	if !strings.Contains(buf.String(), `"msg":"test json slog"`) || !strings.Contains(buf.String(), `"key":"val"`) {
+		t.Errorf("expected JSON output from slog: %q", buf.String())
+	}
+}
+
+func TestParseLevel(t *testing.T) {
+	tests := []struct {
+		input       string
+		expected    slog.Level
+		expectError bool
+	}{
+		{"debug", slog.LevelDebug, false},
+		{"DEBUG", slog.LevelDebug, false},
+		{"verbose", slog.LevelDebug, false},
+		{"VERBOSE", slog.LevelDebug, false},
+		{"info", slog.LevelInfo, false},
+		{"INFO", slog.LevelInfo, false},
+		{"", slog.LevelInfo, false},
+		{"warn", slog.LevelWarn, false},
+		{"warning", slog.LevelWarn, false},
+		{"error", slog.LevelError, false},
+		{"invalid", slog.LevelInfo, true},
+	}
+
+	for _, tc := range tests {
+		lvl, err := ParseLevel(tc.input)
+		if (err != nil) != tc.expectError {
+			t.Errorf("ParseLevel(%q) unexpected error status: %v", tc.input, err)
+		}
+		if !tc.expectError && lvl != tc.expected {
+			t.Errorf("ParseLevel(%q) = %v, expected %v", tc.input, lvl, tc.expected)
+		}
+	}
+}
+
+func TestPrintConfigMasking(t *testing.T) {
 	cfg := sampleConfig{
 		Bind:         "0.0.0.0",
 		Port:         8080,
@@ -58,8 +163,8 @@ func TestPrintConfigMasking(t *testing.T) {
 		Password:     "supersecret",
 	}
 
-	l.PrintConfig(cfg)
-	out := buf.String()
+	items := StructToConfigItems(cfg)
+	out := FormatConfig("Config", items, false)
 
 	if !strings.Contains(out, "Bind") || !strings.Contains(out, "0.0.0.0") {
 		t.Errorf("expected Bind to be printed, got: %q", out)
@@ -82,10 +187,6 @@ func TestPrintConfigMasking(t *testing.T) {
 }
 
 func TestConfigItemsAlignment(t *testing.T) {
-	var buf bytes.Buffer
-	l := New(&buf)
-	l.SetColor(false)
-
 	items := []ConfigItem{
 		{Key: "A", Value: "val1"},
 		{Key: "LongKeyName", Value: "val2"},
@@ -93,7 +194,7 @@ func TestConfigItemsAlignment(t *testing.T) {
 		{Key: "EmptyKey", Value: "", Sensitive: true},
 	}
 
-	out := l.FormatConfig("My Settings", items)
+	out := FormatConfig("My Settings", items, false)
 	lines := strings.Split(strings.TrimSpace(out), "\n")
 
 	if lines[0] != "My Settings" {
