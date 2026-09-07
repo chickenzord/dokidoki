@@ -30,29 +30,54 @@ Managing Docker Compose stacks across multiple machines (LAN servers, cloud VPS,
 ## How It Works
 
 ```
-                        Browser / Client App
-                                 │
-                 1. Initial hit: http://node-a:8080
-                                 │
-                 2. Fetches cluster topology
-                    Cached to localStorage
-                                 │
-         ┌───────────────────────┼───────────────────────┐
-         │ (Direct LAN ~0.5ms)   │ (VPN / Fallback)      │ (Remote Cloud)
-         ▼                       ▼                       ▼
+                         Browser / Client App
+                                  │
+                  1. Initial hit: http://node-a:8080
+                                  │
+                  2. Fetches cluster topology
+                     Cached to localStorage
+                                  │
+          ┌───────────────────────┼───────────────────────┐
+          │ (Direct LAN ~0.5ms)   │ (VPN / Fallback)      │ (Remote Cloud)
+          ▼                       ▼                       ▼
 ┌──────────────────┐    ┌──────────────────┐    ┌──────────────────┐
 │      Node A      │    │      Node B      │    │      Node C      │
 │  /opt/stacks/    │    │  /opt/stacks/    │    │  /opt/stacks/    │
 │  Docker Socket   │    │  Docker Socket   │    │  Docker Socket   │
 └────────┬─────────┘    └────────┬─────────┘    └────────┬─────────┘
          │                       │                       │
-         └──────── Peer Gossip & Heartbeat (SWIM) ───────┘
+         └──── HTTP Heartbeats & Peer Exchange (PEX) ────┘
+               + Local Subnet Discovery via mDNS
 ```
 
-1. **Gossip Heartbeat:** Nodes exchange lightweight heartbeats over UDP/TCP to maintain an active registry of healthy peers and candidate endpoints.
-2. **Cluster Topology Endpoint:** Any node responds to `GET /api/v1/nodes` with the list of alive peers and their candidate addresses.
-3. **Client Probing:** The client probes endpoints to find the lowest-latency path for each node.
-4. **Resilient Failover:** If the initial entrypoint goes down, the client falls back to the next cached node in `localStorage`.
+1. **Dual Discovery (mDNS + PEX):**
+   - **LAN (Zero-Config):** Multicast DNS (`_dokidoki._tcp`) automatically advertises and discovers peers on the local subnet.
+   - **Cross-Subnet / WAN:** Configured seed peers (`PEERS`) and HTTP Peer Exchange (PEX) distribute known peer tables across nodes.
+2. **HTTP Heartbeats & State Tracking:**
+   - Nodes exchange periodic HTTP heartbeats (`POST /api/v1/cluster/heartbeat`) over their standard HTTP port—no UDP or complex gossip daemons required.
+   - Node status transitions across `alive` → `suspect` → `offline` based on active TTL tracking.
+   - Offline nodes are preserved in cluster memory and dashboard views until explicitly removed.
+3. **Cluster Topology Endpoint:**
+   - Every node exposes `GET /api/v1/nodes` returning alive, suspect, and offline peers along with their candidate IP addresses.
+4. **Client Probing & Resilient Failover:**
+   - The browser / client app fetches cluster topology, caches it in `localStorage`, and connects directly to each node.
+   - If an entrypoint node goes down, the client seamlessly switches to any reachable peer.
+
+---
+
+## Cluster Architecture
+
+### Node Identity
+Each Dokidoki node generates a unique UUIDv4 persisted to `$STACKS_DIR/.dokidoki/node_id`. This guarantees identity stability across host reboots, IP address reallocations, and container restarts.
+
+### Discovery Protocols
+Instead of heavy UDP gossip protocols (like SWIM or Memberlist) that struggle behind reverse proxies and VPN firewalls, Dokidoki utilizes standard HTTP-native discovery:
+* **mDNS Provider:** Broadcasts the instance on the LAN. Discovered peers trigger an immediate HTTP handshake.
+* **Static Provider:** Connects to configured bootstrap seed nodes (`--peers`).
+* **PEX Provider:** Piggybacks known peer tables onto periodic heartbeat requests, organically propagating cluster membership without centralized coordinators.
+
+### Security
+Inter-node clustering can be secured with a pre-shared cluster token (`DOKIDOKI_CLUSTER_TOKEN`). When configured, handshakes, heartbeats, and peer exchange require matching tokens via HTTP request payload or `X-Cluster-Token` headers.
 
 ---
 
@@ -66,5 +91,3 @@ Managing Docker Compose stacks across multiple machines (LAN servers, cloud VPS,
   * Strict resource-oriented hierarchy (`/api/v1/{collection}[/{id}[/{sub-resource}]]`).
   * Zero sibling static-vs-parameter route collisions (no static routes at the `{name}` or `{id}` level).
   * Filter variations (like grouping) handled exclusively via query parameters (`?grouped=true`).
-
-

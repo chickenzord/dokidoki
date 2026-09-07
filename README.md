@@ -1,16 +1,14 @@
 # Dokidoki (ドキドキ)
 
-> **Decentralized, heartbeat-driven Docker Compose fleet manager.**
+Docker Compose manager for multiple hosts.
 
-Dokidoki is a lightweight, file-first container stack manager designed for multi-host homelabs and edge setups. It eliminates the single-point-of-failure problem of centralized dashboards without introducing the heavyweight complexity of cluster orchestrators.
-
-Hit **any** node in your fleet to see and manage **every** node.
+Dokidoki monitors Docker Compose stacks on your hosts (`/opt/stacks`), connects nodes together via local mDNS or peer exchange, and provides a web interface to inspect stacks and containers across your machines.
 
 ---
 
 ## Quick Install
 
-Run the automated host installer to bootstrap Dokidoki as a managed Docker Compose stack on your machine:
+Run the host installer to set up Dokidoki as a Docker Compose stack:
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/chickenzord/dokidoki/main/install.sh | bash
@@ -92,8 +90,8 @@ Dokidoki is configured via environment variables or command-line flags (flags ta
 
 ---
 
-## Architecture & Design
+## Design Documentation
 
-For in-depth details on the problem statement, core philosophy, and peer exchange (PEX) protocol, see:
+For details on architecture, clustering, and design decisions, see:
 
 * [Dokidoki System Design](docs/design/system_design.md)
