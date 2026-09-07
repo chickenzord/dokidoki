@@ -70,6 +70,10 @@ func (m *mockDocker) Close() error {
 }
 
 func setupTestServer(t *testing.T, m *mockDocker) (http.Handler, string) {
+	return setupTestServerWithSelf(t, m, "")
+}
+
+func setupTestServerWithSelf(t *testing.T, m *mockDocker, selfContainerID string) (http.Handler, string) {
 	tempDir := t.TempDir()
 
 	// Create a managed stack directory with compose.yaml
@@ -89,7 +93,7 @@ func setupTestServer(t *testing.T, m *mockDocker) (http.Handler, string) {
 	}
 
 	scanner := stacks.NewScanner(tempDir)
-	server := NewServer(cfg, m, scanner, nil)
+	server := NewServer(cfg, m, scanner, nil, selfContainerID)
 	return server.Routes(), tempDir
 }
 
@@ -368,6 +372,28 @@ func TestListContainers(t *testing.T) {
 	if len(grouped.Stacks) != 2 || len(grouped.Standalone) != 1 {
 		t.Fatalf("unexpected grouped containers: %+v", grouped)
 	}
+
+	// 4. Verify is_self with selfContainerID set
+	handlerWithSelf, _ := setupTestServerWithSelf(t, m, "cid-1")
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers", nil)
+	w = httptest.NewRecorder()
+	handlerWithSelf.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var flatWithSelf []model.ContainerSummary
+	if err := json.Unmarshal(w.Body.Bytes(), &flatWithSelf); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	for _, c := range flatWithSelf {
+		if c.ID == "cid-1" && !c.IsSelf {
+			t.Errorf("expected container cid-1 to have is_self=true")
+		}
+		if c.ID != "cid-1" && c.IsSelf {
+			t.Errorf("expected container %s to have is_self=false", c.ID)
+		}
+	}
 }
 
 func TestInspectContainer(t *testing.T) {
@@ -400,7 +426,7 @@ func TestInspectContainer(t *testing.T) {
 	}
 	handler, _ := setupTestServer(t, m)
 
-	// Managed container inspection
+	// Managed container inspection (bare-metal / no selfContainerID)
 	req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -415,16 +441,36 @@ func TestInspectContainer(t *testing.T) {
 	if enriched.StackName != "web-stack" || enriched.ServiceName != "web" || enriched.Source != "managed" {
 		t.Fatalf("unexpected enrichment: %+v", enriched)
 	}
+	if enriched.IsSelf {
+		t.Errorf("expected is_self=false when no selfContainerID configured")
+	}
 
-	// Standalone container inspection
-	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-2", nil)
+	// Inspection with selfContainerID set to cid-1
+	handlerWithSelf, _ := setupTestServerWithSelf(t, m, "cid-1")
+
+	// 1. Inspect self container
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1", nil)
 	w = httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
-
+	handlerWithSelf.ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
 	_ = json.Unmarshal(w.Body.Bytes(), &enriched)
+	if !enriched.IsSelf {
+		t.Errorf("expected is_self=true for self container cid-1")
+	}
+
+	// 2. Inspect non-self container
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-2", nil)
+	w = httptest.NewRecorder()
+	handlerWithSelf.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &enriched)
+	if enriched.IsSelf {
+		t.Errorf("expected is_self=false for non-self container cid-2")
+	}
 	if enriched.Source != "standalone" {
 		t.Fatalf("expected source 'standalone', got %q", enriched.Source)
 	}
@@ -549,7 +595,7 @@ func setupClusterTestServer(t *testing.T, token string) (http.Handler, *cluster.
 
 	cm := cluster.NewManager(self, token, 30*time.Second, nil)
 	scanner := stacks.NewScanner(tempDir)
-	server := NewServer(cfg, m, scanner, cm)
+	server := NewServer(cfg, m, scanner, cm, "")
 	return server.Routes(), cm
 }
 
@@ -828,4 +874,66 @@ func TestClusterLeave(t *testing.T) {
 		t.Fatalf("expected 404 for non-existent node, got %d", w.Code)
 	}
 }
+
+func TestWebUIHandler(t *testing.T) {
+	m := &mockDocker{
+		pingFn: func(ctx context.Context) (types.Ping, error) {
+			return types.Ping{APIVersion: "1.47"}, nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// 1. Root / serves index.html
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /, got %d", w.Code)
+	}
+	if body := w.Body.String(); !bytes.Contains(w.Body.Bytes(), []byte("Dokidoki")) {
+		t.Fatalf("expected index.html with Dokidoki, got: %s", body)
+	}
+
+	// 2. Non-API route falls back to SPA index.html
+	req = httptest.NewRequest(http.MethodGet, "/stacks/my-custom-stack", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for SPA route, got %d", w.Code)
+	}
+	if !bytes.Contains(w.Body.Bytes(), []byte("Dokidoki")) {
+		t.Fatalf("expected fallback index.html for SPA route")
+	}
+
+	// 3. API route /api/v1/host/ping has precedence
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/host/ping", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for API ping, got %d", w.Code)
+	}
+	var resp map[string]string
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+	if resp["status"] != "ok" {
+		t.Fatalf("expected status ok, got %v", resp)
+	}
+
+	// 4. Unknown /api/v1 route returns 404 and does not fall back to web UI
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/not-a-real-route", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown API route, got %d", w.Code)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("Dokidoki")) {
+		t.Fatalf("expected 404, not web UI SPA fallback for /api/v1 routes")
+	}
+}
+
 

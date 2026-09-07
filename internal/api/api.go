@@ -8,6 +8,7 @@ import (
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/stacks"
+	"github.com/chickenzord/dokidoki/web"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
@@ -15,15 +16,16 @@ import (
 
 // Server holds dependencies for the REST API.
 type Server struct {
-	cfg            *config.Config
-	dockerCli      docker.Client
-	scanner        *stacks.Scanner
-	stacksDir      string
-	clusterManager *cluster.Manager
+	cfg             *config.Config
+	dockerCli       docker.Client
+	scanner         *stacks.Scanner
+	stacksDir       string
+	clusterManager  *cluster.Manager
+	selfContainerID string
 }
 
 // NewServer creates a new API Server instance.
-func NewServer(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager) *Server {
+func NewServer(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager, selfContainerID string) *Server {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
@@ -31,17 +33,18 @@ func NewServer(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scan
 		scanner = stacks.NewScanner(cfg.StacksDir)
 	}
 	return &Server{
-		cfg:            cfg,
-		dockerCli:      dockerCli,
-		scanner:        scanner,
-		stacksDir:      cfg.StacksDir,
-		clusterManager: clusterManager,
+		cfg:             cfg,
+		dockerCli:       dockerCli,
+		scanner:         scanner,
+		stacksDir:       cfg.StacksDir,
+		clusterManager:  clusterManager,
+		selfContainerID: selfContainerID,
 	}
 }
 
 // NewRouter creates and configures the chi Router for Dokidoki.
-func NewRouter(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager) http.Handler {
-	s := NewServer(cfg, dockerCli, scanner, clusterManager)
+func NewRouter(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager, selfContainerID string) http.Handler {
+	s := NewServer(cfg, dockerCli, scanner, clusterManager, selfContainerID)
 	return s.Routes()
 }
 
@@ -85,6 +88,9 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/cluster/heartbeat", s.handleHeartbeat)
 		r.Post("/cluster/leave", s.handleLeave)
 	})
+
+	// Mount embedded Web UI handler for SPA routing with client-side fallback
+	r.Handle("/*", web.Handler())
 
 	return r
 }

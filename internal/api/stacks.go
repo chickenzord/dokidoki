@@ -24,7 +24,7 @@ func (s *Server) handleListStacks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	categorized := stacks.CategorizeRaw(discovered, rawContainers)
+	categorized := stacks.CategorizeRaw(discovered, rawContainers, s.selfContainerID)
 
 	sourceParam := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("source")))
 	if sourceParam == "" {
@@ -67,7 +67,7 @@ func (s *Server) handleGetStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	categorized := stacks.CategorizeRaw(discovered, rawContainers)
+	categorized := stacks.CategorizeRaw(discovered, rawContainers, s.selfContainerID)
 	detail, found := categorized.GetStack(name)
 	if !found {
 		writeError(w, http.StatusNotFound, "stack not found")
@@ -100,7 +100,7 @@ func (s *Server) handleGetStackCompose(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	categorized := stacks.CategorizeRaw(discovered, rawContainers)
+	categorized := stacks.CategorizeRaw(discovered, rawContainers, s.selfContainerID)
 	detail, found := categorized.GetStack(name)
 	if !found || !detail.ComposePresent || detail.ComposePath == "" {
 		writeError(w, http.StatusNotFound, "compose file not found")
@@ -145,7 +145,7 @@ func (s *Server) handleGetStackContainers(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	categorized := stacks.CategorizeRaw(discovered, rawContainers)
+	categorized := stacks.CategorizeRaw(discovered, rawContainers, s.selfContainerID)
 	detail, found := categorized.GetStack(name)
 	if !found {
 		writeError(w, http.StatusNotFound, "stack not found")

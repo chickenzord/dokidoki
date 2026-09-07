@@ -248,7 +248,7 @@ func TestCategorize_MixedScenario(t *testing.T) {
 		},
 	}
 
-	result := CategorizeRaw(discovered, rawContainers)
+	result := CategorizeRaw(discovered, rawContainers, "")
 
 	// Should have 3 stacks: coolify-proxy (external), managed-active (managed), managed-idle (managed)
 	if len(result.Stacks) != 3 {
@@ -448,7 +448,7 @@ func TestConvertContainer(t *testing.T) {
 		},
 	}
 
-	summary := ConvertContainer(c)
+	summary := ConvertContainer(c, "")
 
 	if summary.ID != "abc123def456789" {
 		t.Errorf("unexpected ID: %s", summary.ID)
@@ -474,13 +474,120 @@ func TestConvertContainer(t *testing.T) {
 	if summary.Labels["custom.label"] != "value" {
 		t.Errorf("unexpected labels: %+v", summary.Labels)
 	}
+	if summary.IsSelf {
+		t.Errorf("expected IsSelf to be false with empty selfContainerID")
+	}
 
 	// Test container with no name falling back to trimmed ID
 	cNoName := types.Container{
 		ID: "1234567890abcdef1234",
 	}
-	summaryNoName := ConvertContainer(cNoName)
+	summaryNoName := ConvertContainer(cNoName, "")
 	if summaryNoName.Name != "1234567890ab" {
 		t.Errorf("expected fallback to 12 chars ID, got %s", summaryNoName.Name)
+	}
+}
+
+func TestConvertContainer_IsSelf(t *testing.T) {
+	fullID := "47040a455a73e4492976839aa640ebfba41c30573eef3eebae08447d21c16cf1"
+	shortID := "47040a455a73"
+	otherID := "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+
+	tests := []struct {
+		name            string
+		containerID     string
+		selfContainerID string
+		expectedIsSelf  bool
+	}{
+		{
+			name:            "exact 64-char match",
+			containerID:     fullID,
+			selfContainerID: fullID,
+			expectedIsSelf:  true,
+		},
+		{
+			name:            "short container ID with full selfContainerID",
+			containerID:     shortID,
+			selfContainerID: fullID,
+			expectedIsSelf:  true,
+		},
+		{
+			name:            "full container ID with short selfContainerID",
+			containerID:     fullID,
+			selfContainerID: shortID,
+			expectedIsSelf:  true,
+		},
+		{
+			name:            "different ID",
+			containerID:     otherID,
+			selfContainerID: fullID,
+			expectedIsSelf:  false,
+		},
+		{
+			name:            "empty selfContainerID",
+			containerID:     fullID,
+			selfContainerID: "",
+			expectedIsSelf:  false,
+		},
+		{
+			name:            "empty containerID",
+			containerID:     "",
+			selfContainerID: fullID,
+			expectedIsSelf:  false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			c := types.Container{ID: tt.containerID}
+			summary := ConvertContainer(c, tt.selfContainerID)
+			if summary.IsSelf != tt.expectedIsSelf {
+				t.Errorf("expected IsSelf = %v, got %v", tt.expectedIsSelf, summary.IsSelf)
+			}
+		})
+	}
+}
+
+func TestCategorizeContainers(t *testing.T) {
+	selfID := "47040a455a73e4492976839aa640ebfba41c30573eef3eebae08447d21c16cf1"
+	managed := map[string]string{
+		"my-stack": "/opt/stacks/my-stack/compose.yaml",
+	}
+
+	containers := []types.Container{
+		{
+			ID:    selfID,
+			Names: []string{"/dokidoki"},
+			State: "running",
+			Labels: map[string]string{
+				model.ComposeProjectLabel: "my-stack",
+				model.ComposeServiceLabel: "dokidoki",
+			},
+		},
+		{
+			ID:    "other123456789012",
+			Names: []string{"/other-app"},
+			State: "running",
+		},
+	}
+
+	result := CategorizeContainers(containers, managed, selfID)
+	if len(result.Stacks) != 1 {
+		t.Fatalf("expected 1 stack, got %d", len(result.Stacks))
+	}
+
+	detail, ok := result.GetStack("my-stack")
+	if !ok || len(detail.Containers) != 1 {
+		t.Fatalf("expected 1 container in my-stack detail")
+	}
+	if !detail.Containers[0].IsSelf {
+		t.Errorf("expected self container IsSelf=true")
+	}
+
+	if len(result.Standalone) != 1 {
+		t.Fatalf("expected 1 standalone container")
+	}
+	if result.Standalone[0].IsSelf {
+		t.Errorf("expected other container IsSelf=false")
 	}
 }

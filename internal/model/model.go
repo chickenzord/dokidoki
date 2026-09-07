@@ -60,6 +60,7 @@ type ContainerSummary struct {
 	Labels  map[string]string `json:"labels"`
 	Stack   string            `json:"stack,omitempty"`
 	Service string            `json:"service,omitempty"`
+	IsSelf  bool              `json:"is_self"`
 }
 
 // GroupedContainers contains containers organized by stack alongside standalone containers.

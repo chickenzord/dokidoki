@@ -44,8 +44,25 @@ func (r *CategorizedResult) ExternalStacks() []model.StackSummary {
 	return result
 }
 
+// isSelfContainer returns true if containerID matches selfContainerID or matches prefix.
+func isSelfContainer(containerID, selfContainerID string) bool {
+	if containerID == "" || selfContainerID == "" {
+		return false
+	}
+	if containerID == selfContainerID {
+		return true
+	}
+	if len(selfContainerID) >= 12 && strings.HasPrefix(containerID, selfContainerID) {
+		return true
+	}
+	if len(containerID) >= 12 && strings.HasPrefix(selfContainerID, containerID) {
+		return true
+	}
+	return false
+}
+
 // ConvertContainer converts a Docker types.Container to a normalized model.ContainerSummary.
-func ConvertContainer(c types.Container) model.ContainerSummary {
+func ConvertContainer(c types.Container, selfContainerID string) model.ContainerSummary {
 	name := ""
 	if len(c.Names) > 0 {
 		name = strings.TrimPrefix(c.Names[0], "/")
@@ -89,14 +106,15 @@ func ConvertContainer(c types.Container) model.ContainerSummary {
 		Labels:  labels,
 		Stack:   stack,
 		Service: service,
+		IsSelf:  isSelfContainer(c.ID, selfContainerID),
 	}
 }
 
 // ConvertContainers converts a slice of Docker types.Container to model.ContainerSummary.
-func ConvertContainers(raw []types.Container) []model.ContainerSummary {
+func ConvertContainers(raw []types.Container, selfContainerID string) []model.ContainerSummary {
 	res := make([]model.ContainerSummary, len(raw))
 	for i, c := range raw {
-		res[i] = ConvertContainer(c)
+		res[i] = ConvertContainer(c, selfContainerID)
 	}
 	return res
 }
@@ -243,6 +261,19 @@ func Categorize(discovered []DiscoveredStack, containers []model.ContainerSummar
 }
 
 // CategorizeRaw converts raw Docker containers and categorizes them against discovered stacks.
-func CategorizeRaw(discovered []DiscoveredStack, raw []types.Container) *CategorizedResult {
-	return Categorize(discovered, ConvertContainers(raw))
+func CategorizeRaw(discovered []DiscoveredStack, raw []types.Container, selfContainerID string) *CategorizedResult {
+	return Categorize(discovered, ConvertContainers(raw, selfContainerID))
+}
+
+// CategorizeContainers converts containers with selfContainerID and categorizes them against managed stacks map.
+func CategorizeContainers(containers []types.Container, managed map[string]string, selfContainerID string) *CategorizedResult {
+	var discovered []DiscoveredStack
+	for name, composePath := range managed {
+		discovered = append(discovered, DiscoveredStack{
+			Name:           name,
+			ComposePath:    composePath,
+			ComposePresent: composePath != "",
+		})
+	}
+	return CategorizeRaw(discovered, containers, selfContainerID)
 }

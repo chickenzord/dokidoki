@@ -17,6 +17,7 @@ type EnrichedContainerInspect struct {
 	StackName   string `json:"stack_name"`
 	ServiceName string `json:"service_name"`
 	Source      string `json:"source"`
+	IsSelf      bool   `json:"is_self"`
 }
 
 // handleListContainers handles GET /api/v1/containers.
@@ -37,7 +38,7 @@ func (s *Server) handleListContainers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	categorized := stacks.CategorizeRaw(discovered, rawContainers)
+	categorized := stacks.CategorizeRaw(discovered, rawContainers, s.selfContainerID)
 
 	// Check grouped query param
 	if r.URL.Query().Get("grouped") == "true" {
@@ -65,7 +66,7 @@ func (s *Server) handleListContainers(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Otherwise, return all containers flat
-	all := stacks.ConvertContainers(rawContainers)
+	all := stacks.ConvertContainers(rawContainers, s.selfContainerID)
 	if all == nil {
 		all = []model.ContainerSummary{}
 	}
@@ -114,11 +115,22 @@ func (s *Server) handleInspectContainer(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
+	isSelf := false
+	if s.selfContainerID != "" {
+		if inspect.ID == s.selfContainerID ||
+			id == s.selfContainerID ||
+			(len(s.selfContainerID) >= 12 && strings.HasPrefix(inspect.ID, s.selfContainerID)) ||
+			(len(inspect.ID) >= 12 && strings.HasPrefix(s.selfContainerID, inspect.ID)) {
+			isSelf = true
+		}
+	}
+
 	enriched := EnrichedContainerInspect{
 		ContainerJSON: inspect,
 		StackName:     stackName,
 		ServiceName:   serviceName,
 		Source:        source,
+		IsSelf:        isSelf,
 	}
 
 	writeJSON(w, http.StatusOK, enriched)

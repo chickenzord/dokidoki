@@ -20,7 +20,11 @@ import (
 	"github.com/chickenzord/dokidoki/internal/stacks"
 )
 
-const Version = "0.1.0"
+var (
+	version   = "0.1.0"
+	commit    = "unknown"
+	buildTime = "unknown"
+)
 
 func main() {
 	cfg, err := config.Load()
@@ -42,7 +46,7 @@ func main() {
 	candidateAddrs := cluster.DetectCandidateAddresses(cfg.Bind, cfg.Port, cfg.AdvertiseAddrs)
 
 	// Log startup and configuration
-	logger.Infof("Starting Dokidoki v%s", Version)
+	logger.Infof("Starting Dokidoki v%s", version)
 
 	dockerHostVal := cfg.DockerHost
 	if dockerHostVal == "" {
@@ -78,13 +82,25 @@ func main() {
 	}
 	defer dockerCli.Close()
 
+	// Identify container self ID if running containerized
+	selfContainerID := docker.IdentifySelf(context.Background(), dockerCli)
+	if selfContainerID != "" {
+		shortSelfID := selfContainerID
+		if len(shortSelfID) > 12 {
+			shortSelfID = shortSelfID[:12]
+		}
+		logger.Infof("Running inside Docker container: %s", shortSelfID)
+	} else {
+		logger.Infof("Running on host (bare-metal, not containerized)")
+	}
+
 	// Initialize Cluster Manager
 	self := model.Node{
 		ID:        nodeID,
 		Name:      cfg.NodeName,
 		Addresses: candidateAddrs,
 		Status:    model.NodeStatusAlive,
-		Version:   Version,
+		Version:   version,
 		IsSelf:    true,
 	}
 
@@ -105,7 +121,7 @@ func main() {
 
 	// Initialize API Router and HTTP Server
 	scanner := stacks.NewScanner(cfg.StacksDir)
-	router := api.NewRouter(cfg, dockerCli, scanner, clusterManager)
+	router := api.NewRouter(cfg, dockerCli, scanner, clusterManager, selfContainerID)
 
 	server := &http.Server{
 		Addr:         cfg.Addr(),
