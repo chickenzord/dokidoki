@@ -80,19 +80,11 @@ export const Navbar: React.FC<NavbarProps> = ({
           {/* Logo and Brand */}
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-rose-600 via-pink-500 to-rose-400 flex items-center justify-center shadow-lg shadow-rose-950/50">
-              <Activity className="w-6 h-6 text-white animate-pulse" />
+              <Activity className="w-6 h-6 text-white" />
             </div>
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2">
-                <span className="font-extrabold text-xl tracking-tight text-white">
-                  Dokidoki
-                </span>
-                <span className="px-2 py-0.5 text-[10px] uppercase font-bold tracking-wider rounded-md bg-rose-500/20 text-rose-300 border border-rose-500/30">
-                  Cluster
-                </span>
-              </div>
-              <span className="text-xs text-slate-400">Edge Docker &amp; Compose Orchestration</span>
-            </div>
+            <span className="font-extrabold text-xl tracking-tight text-white">
+              Dokidoki
+            </span>
           </div>
 
           {/* Right side controls */}

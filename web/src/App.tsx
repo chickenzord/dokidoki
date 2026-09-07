@@ -180,19 +180,6 @@ export const App: React.FC = () => {
           )}
         </div>
       </main>
-
-      {/* Footer */}
-      <footer className="border-t border-slate-800/80 bg-slate-950/80 py-5 text-xs text-slate-500 text-center font-mono">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row items-center justify-between gap-2">
-          <div className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-rose-500"></span>
-            <span>Dokidoki Edge Orchestrator</span>
-          </div>
-          <div>
-            <span>Cluster Mesh • mDNS &amp; PEX Discovery</span>
-          </div>
-        </div>
-      </footer>
     </div>
   );
 };
