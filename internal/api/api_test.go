@@ -1,0 +1,526 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"testing"
+
+	"github.com/chickenzord/dokidoki/internal/config"
+	"github.com/chickenzord/dokidoki/internal/model"
+	"github.com/chickenzord/dokidoki/internal/stacks"
+	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/system"
+	errdefs "github.com/docker/docker/errdefs"
+)
+
+type mockDocker struct {
+	pingFn             func(ctx context.Context) (types.Ping, error)
+	listContainersFn   func(ctx context.Context) ([]types.Container, error)
+	inspectContainerFn func(ctx context.Context, id string) (types.ContainerJSON, error)
+	serverVersionFn    func(ctx context.Context) (types.Version, error)
+	infoFn             func(ctx context.Context) (system.Info, error)
+}
+
+func (m *mockDocker) Ping(ctx context.Context) (types.Ping, error) {
+	if m.pingFn != nil {
+		return m.pingFn(ctx)
+	}
+	return types.Ping{}, nil
+}
+
+func (m *mockDocker) ListContainers(ctx context.Context) ([]types.Container, error) {
+	if m.listContainersFn != nil {
+		return m.listContainersFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockDocker) InspectContainer(ctx context.Context, id string) (types.ContainerJSON, error) {
+	if m.inspectContainerFn != nil {
+		return m.inspectContainerFn(ctx, id)
+	}
+	return types.ContainerJSON{}, nil
+}
+
+func (m *mockDocker) ServerVersion(ctx context.Context) (types.Version, error) {
+	if m.serverVersionFn != nil {
+		return m.serverVersionFn(ctx)
+	}
+	return types.Version{Version: "27.5.1", APIVersion: "1.47", Os: "linux", Arch: "amd64"}, nil
+}
+
+func (m *mockDocker) Info(ctx context.Context) (system.Info, error) {
+	if m.infoFn != nil {
+		return m.infoFn(ctx)
+	}
+	return system.Info{Containers: 2, ContainersRunning: 1, ContainersPaused: 0, ContainersStopped: 1, OperatingSystem: "Linux"}, nil
+}
+
+func (m *mockDocker) Close() error {
+	return nil
+}
+
+func setupTestServer(t *testing.T, m *mockDocker) (http.Handler, string) {
+	tempDir := t.TempDir()
+
+	// Create a managed stack directory with compose.yaml
+	managedDir := filepath.Join(tempDir, "web-stack")
+	if err := os.MkdirAll(managedDir, 0755); err != nil {
+		t.Fatalf("failed to create stack dir: %v", err)
+	}
+	composeContent := "services:\n  web:\n    image: nginx:latest\n"
+	if err := os.WriteFile(filepath.Join(managedDir, "compose.yaml"), []byte(composeContent), 0644); err != nil {
+		t.Fatalf("failed to write compose.yaml: %v", err)
+	}
+
+	cfg := &config.Config{
+		Bind:      "127.0.0.1",
+		Port:      8080,
+		StacksDir: tempDir,
+	}
+
+	scanner := stacks.NewScanner(tempDir)
+	server := NewServer(cfg, m, scanner)
+	return server.Routes(), tempDir
+}
+
+func sampleContainers() []types.Container {
+	return []types.Container{
+		{
+			ID:    "cid-1",
+			Names: []string{"/web-stack_web_1"},
+			Image: "nginx:latest",
+			State: "running",
+			Labels: map[string]string{
+				model.ComposeProjectLabel: "web-stack",
+				model.ComposeServiceLabel: "web",
+			},
+		},
+		{
+			ID:    "cid-2",
+			Names: []string{"/external_db_1"},
+			Image: "postgres:latest",
+			State: "running",
+			Labels: map[string]string{
+				model.ComposeProjectLabel: "external-stack",
+				model.ComposeServiceLabel: "db",
+			},
+		},
+		{
+			ID:    "cid-3",
+			Names: []string{"/standalone-app"},
+			Image: "alpine:latest",
+			State: "exited",
+		},
+	}
+}
+
+func TestListStacks(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// 1. Default (all)
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var stacksAll []model.StackSummary
+	if err := json.Unmarshal(w.Body.Bytes(), &stacksAll); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+	if len(stacksAll) != 2 {
+		t.Fatalf("expected 2 stacks, got %d", len(stacksAll))
+	}
+
+	// 2. Managed only
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks?source=managed", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var stacksManaged []model.StackSummary
+	if err := json.Unmarshal(w.Body.Bytes(), &stacksManaged); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+	if len(stacksManaged) != 1 || stacksManaged[0].Name != "web-stack" {
+		t.Fatalf("expected 1 managed stack 'web-stack', got %+v", stacksManaged)
+	}
+
+	// 3. External only
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks?source=external", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var stacksExt []model.StackSummary
+	if err := json.Unmarshal(w.Body.Bytes(), &stacksExt); err != nil {
+		t.Fatalf("failed to unmarshal JSON: %v", err)
+	}
+	if len(stacksExt) != 1 || stacksExt[0].Name != "external-stack" {
+		t.Fatalf("expected 1 external stack 'external-stack', got %+v", stacksExt)
+	}
+
+	// 4. Invalid source parameter
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks?source=foo", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid source, got %d", w.Code)
+	}
+}
+
+func TestGetStack(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// Existing stack
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var detail model.StackDetail
+	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if detail.Name != "web-stack" || detail.Source != "managed" {
+		t.Fatalf("unexpected detail: %+v", detail)
+	}
+
+	// Non-existent stack
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/not-exist", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+	var errResp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &errResp)
+	if errResp["error"] != "stack not found" {
+		t.Fatalf("expected 'stack not found', got %q", errResp["error"])
+	}
+}
+
+func TestGetStackCompose(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// 1. JSON default
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack/compose", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp model.ComposeFileResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if resp.Name != "web-stack" || resp.Content == "" {
+		t.Fatalf("unexpected compose response: %+v", resp)
+	}
+
+	// 2. YAML accept header
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack/compose", nil)
+	req.Header.Set("Accept", "text/yaml")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/yaml; charset=utf-8" {
+		t.Fatalf("expected Content-Type text/yaml; charset=utf-8, got %q", ct)
+	}
+	if w.Body.String() != "services:\n  web:\n    image: nginx:latest\n" {
+		t.Fatalf("unexpected raw compose: %s", w.Body.String())
+	}
+
+	// 3. Stack without compose file (external-stack)
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/external-stack/compose", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for external stack compose, got %d", w.Code)
+	}
+}
+
+func TestGetStackContainers(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack/containers", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var containers []model.ContainerSummary
+	if err := json.Unmarshal(w.Body.Bytes(), &containers); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(containers) != 1 || containers[0].ID != "cid-1" {
+		t.Fatalf("unexpected containers: %+v", containers)
+	}
+
+	// Non-existent stack
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/unknown/containers", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestListContainers(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// 1. Flat all
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/containers", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var flat []model.ContainerSummary
+	if err := json.Unmarshal(w.Body.Bytes(), &flat); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(flat) != 3 {
+		t.Fatalf("expected 3 containers, got %d", len(flat))
+	}
+
+	// 2. Filtered by stack
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers?stack=web-stack", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var filtered []model.ContainerSummary
+	if err := json.Unmarshal(w.Body.Bytes(), &filtered); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(filtered) != 1 || filtered[0].Stack != "web-stack" {
+		t.Fatalf("expected 1 container for web-stack, got %+v", filtered)
+	}
+
+	// 3. Grouped
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers?grouped=true", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var grouped model.GroupedContainers
+	if err := json.Unmarshal(w.Body.Bytes(), &grouped); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(grouped.Stacks) != 2 || len(grouped.Standalone) != 1 {
+		t.Fatalf("unexpected grouped containers: %+v", grouped)
+	}
+}
+
+func TestInspectContainer(t *testing.T) {
+	m := &mockDocker{
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			if id == "cid-1" {
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   "cid-1",
+						Name: "/web-stack_web_1",
+					},
+					Config: &container.Config{
+						Labels: map[string]string{
+							model.ComposeProjectLabel: "web-stack",
+							model.ComposeServiceLabel: "web",
+						},
+					},
+				}, nil
+			}
+			if id == "cid-2" {
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   "cid-2",
+						Name: "/standalone-app",
+					},
+				}, nil
+			}
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("container not found"))
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// Managed container inspection
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var enriched EnrichedContainerInspect
+	if err := json.Unmarshal(w.Body.Bytes(), &enriched); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if enriched.StackName != "web-stack" || enriched.ServiceName != "web" || enriched.Source != "managed" {
+		t.Fatalf("unexpected enrichment: %+v", enriched)
+	}
+
+	// Standalone container inspection
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-2", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &enriched)
+	if enriched.Source != "standalone" {
+		t.Fatalf("expected source 'standalone', got %q", enriched.Source)
+	}
+
+	// Not found container
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-missing", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404, got %d", w.Code)
+	}
+}
+
+func TestHostInfo(t *testing.T) {
+	m := &mockDocker{
+		serverVersionFn: func(ctx context.Context) (types.Version, error) {
+			return types.Version{Version: "27.5.1", APIVersion: "1.47", Os: "linux", Arch: "amd64"}, nil
+		},
+		infoFn: func(ctx context.Context) (system.Info, error) {
+			return system.Info{Containers: 5, ContainersRunning: 3, ContainersPaused: 1, ContainersStopped: 1, OperatingSystem: "Alpine Linux"}, nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/host", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var hostInfo model.HostInfo
+	if err := json.Unmarshal(w.Body.Bytes(), &hostInfo); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if hostInfo.DokidokiVersion != "0.1.0" || hostInfo.Docker.EngineVersion != "27.5.1" || hostInfo.Docker.Containers != 5 {
+		t.Fatalf("unexpected host info: %+v", hostInfo)
+	}
+}
+
+func TestHostPing(t *testing.T) {
+	// Success ping
+	mSuccess := &mockDocker{
+		pingFn: func(ctx context.Context) (types.Ping, error) {
+			return types.Ping{APIVersion: "1.47"}, nil
+		},
+	}
+	handler, _ := setupTestServer(t, mSuccess)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/host/ping", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["status"] != "ok" {
+		t.Fatalf("expected status ok, got %q", resp["status"])
+	}
+
+	// Failure ping
+	mFail := &mockDocker{
+		pingFn: func(ctx context.Context) (types.Ping, error) {
+			return types.Ping{}, errors.New("cannot connect to docker")
+		},
+	}
+	handlerFail, _ := setupTestServer(t, mFail)
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/host/ping", nil)
+	w = httptest.NewRecorder()
+	handlerFail.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("expected 503, got %d", w.Code)
+	}
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["status"] != "error" || resp["error"] != "cannot connect to docker" {
+		t.Fatalf("unexpected failure response: %+v", resp)
+	}
+}
+
+func TestCORS(t *testing.T) {
+	m := &mockDocker{}
+	handler, _ := setupTestServer(t, m)
+
+	req := httptest.NewRequest(http.MethodOptions, "/api/v1/host", nil)
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
+		t.Fatalf("expected 200 or 204 for OPTIONS, got %d", w.Code)
+	}
+	origin := w.Header().Get("Access-Control-Allow-Origin")
+	if origin != "*" && origin != "http://example.com" {
+		t.Fatalf("expected CORS allow origin, got %q", origin)
+	}
+}
