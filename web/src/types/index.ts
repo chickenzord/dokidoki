@@ -50,13 +50,13 @@ export interface ContainerSummary {
   is_self?: boolean;
 }
 
-export interface FleetStack extends StackSummary {
+export interface ClusterStack extends StackSummary {
   hostId: string;
   hostName: string;
   hostEndpoint: string;
 }
 
-export interface FleetContainer extends ContainerSummary {
+export interface ClusterContainer extends ContainerSummary {
   hostId: string;
   hostName: string;
   hostEndpoint: string;

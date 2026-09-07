@@ -1,40 +1,35 @@
 import React, { useState } from 'react';
-import { FleetStack, FleetContainer } from '../types';
-import { useFleetStacksQuery } from '../hooks/useFleetData';
+import { ClusterStack, ClusterContainer } from '../types';
+import { useClusterStacksQuery } from '../hooks/useClusterData';
 import { StackDetailSheet } from './StackDetailSheet';
 import { ContainerDetailSheet } from './ContainerDetailSheet';
-import { ImportStackDialog } from './ImportStackDialog';
 import { Badge } from './ui/badge';
-import { Button } from './ui/button';
 import { Input } from './ui/input';
 import {
   Layers,
-  Server,
-  Download,
   Search,
   AlertCircle,
   Loader2,
 } from 'lucide-react';
 
-interface FleetStacksViewProps {
+export interface ClusterStacksViewProps {
   selectedHostId?: string | null;
   searchQuery?: string;
 }
 
-export const FleetStacksView: React.FC<FleetStacksViewProps> = ({
+export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
   selectedHostId,
   searchQuery: initialSearch = '',
 }) => {
   const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'running'>('all');
   const [localSearch, setLocalSearch] = useState('');
-  const [selectedStack, setSelectedStack] = useState<FleetStack | null>(null);
-  const [importingStack, setImportingStack] = useState<FleetStack | null>(null);
+  const [selectedStack, setSelectedStack] = useState<ClusterStack | null>(null);
 
   // For opening a container from the stack sheet
-  const [selectedContainer, setSelectedContainer] = useState<FleetContainer | null>(null);
+  const [selectedContainer, setSelectedContainer] = useState<ClusterContainer | null>(null);
 
-  const { data: stacks = [], isLoading, error } = useFleetStacksQuery(selectedHostId);
+  const { data: stacks = [], isLoading, error } = useClusterStacksQuery(selectedHostId);
 
   const activeSearch = (initialSearch || localSearch).trim().toLowerCase();
 
@@ -164,16 +159,15 @@ export const FleetStacksView: React.FC<FleetStacksViewProps> = ({
       {isLoading ? (
         <div className="p-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
           <Loader2 className="w-6 h-6 animate-spin text-rose-500" />
-          <span>Scanning fleet stacks...</span>
+          <span>Loading stacks...</span>
         </div>
       ) : filteredStacks.length === 0 ? (
         <div className="p-12 border border-slate-800 rounded-xl text-center text-xs text-slate-500 bg-slate-950/40">
           No stacks found matching your filters.
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3.5">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
           {filteredStacks.map((stack) => {
-            const isManaged = stack.source === 'managed';
             const hasRunning = stack.rollup.running > 0;
             const isAllRunning = stack.rollup.total > 0 && stack.rollup.running === stack.rollup.total;
 
@@ -181,98 +175,30 @@ export const FleetStacksView: React.FC<FleetStacksViewProps> = ({
               <div
                 key={`${stack.hostId}-${stack.name}`}
                 onClick={() => setSelectedStack(stack)}
-                className="group p-4 rounded-xl border border-slate-800/80 bg-slate-900/60 hover:bg-slate-900/90 hover:border-slate-700 transition-all cursor-pointer flex flex-col justify-between gap-3 relative shadow-sm"
+                className="group px-3.5 py-3 rounded-lg border border-slate-800/80 bg-slate-900/40 hover:bg-slate-900 hover:border-slate-700 transition-colors cursor-pointer flex items-center justify-between gap-3 shadow-sm"
               >
-                {/* Header: Title & Badges */}
-                <div className="space-y-2">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Layers className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
-                      <h3 className="font-bold text-sm text-slate-100 group-hover:text-white truncate">
-                        {stack.name}
-                      </h3>
-                    </div>
-
-                    <div className="flex items-center gap-1.5 flex-shrink-0">
-                      {isManaged ? (
-                        <Badge variant="outline" className="text-[10px] bg-emerald-950/40 text-emerald-400 border-emerald-800/60 font-mono">
-                          Managed
-                        </Badge>
-                      ) : (
-                        <Badge variant="outline" className="text-[10px] bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono">
-                          External
-                        </Badge>
-                      )}
-                    </div>
-                  </div>
-
-                  {/* Subdued Host Badge & Path */}
-                  <div className="flex flex-wrap items-center gap-1.5 text-xs text-slate-400">
-                    <Badge variant="outline" className="text-[10px] bg-slate-950 text-slate-300 border-slate-800 font-mono flex items-center gap-1">
-                      <Server className="w-3 h-3 text-slate-500" />
-                      {stack.hostName}
-                    </Badge>
-
-                    {stack.composePath && (
-                      <span className="text-[10px] text-slate-500 font-mono truncate max-w-[180px]" title={stack.composePath}>
-                        {stack.composePath.split('/').pop()}
-                      </span>
-                    )}
-                  </div>
+                <div className="flex items-center gap-2.5 min-w-0">
+                  <span
+                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                      isAllRunning
+                        ? 'bg-emerald-400'
+                        : hasRunning
+                        ? 'bg-amber-400'
+                        : 'bg-slate-600'
+                    }`}
+                    title={isAllRunning ? 'Running' : hasRunning ? 'Partially Running' : 'Stopped'}
+                  />
+                  <span className="font-medium text-sm text-slate-200 group-hover:text-white truncate">
+                    {stack.name}
+                  </span>
                 </div>
 
-                {/* Services Pills */}
-                {stack.services && stack.services.length > 0 && (
-                  <div className="flex flex-wrap gap-1">
-                    {stack.services.slice(0, 4).map((svc) => (
-                      <span
-                        key={svc}
-                        className="text-[10px] font-mono px-2 py-0.5 rounded bg-slate-950/80 text-slate-400 border border-slate-800/80 truncate max-w-[120px]"
-                      >
-                        {svc}
-                      </span>
-                    ))}
-                    {stack.services.length > 4 && (
-                      <span className="text-[10px] text-slate-500 font-mono px-1">
-                        +{stack.services.length - 4}
-                      </span>
-                    )}
-                  </div>
-                )}
-
-                {/* Footer: Container Rollups & Actions */}
-                <div className="pt-2 border-t border-slate-800/80 flex items-center justify-between gap-2">
-                  <div className="flex items-center gap-2 text-xs font-mono">
-                    <span
-                      className={`w-2 h-2 rounded-full ${
-                        isAllRunning
-                          ? 'bg-emerald-400 ring-2 ring-emerald-400/20'
-                          : hasRunning
-                          ? 'bg-amber-400'
-                          : 'bg-slate-600'
-                      }`}
-                    />
-                    <span className="text-slate-300 font-semibold">
-                      {stack.rollup.running} / {stack.rollup.total}
-                    </span>
-                    <span className="text-slate-500 text-[11px]">containers</span>
-                  </div>
-
-                  {!isManaged && (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        setImportingStack(stack);
-                      }}
-                      className="h-6 px-2 text-[11px] text-rose-400 hover:text-white hover:bg-rose-600/20 border border-rose-500/20"
-                    >
-                      <Download className="w-3 h-3 mr-1" />
-                      Import
-                    </Button>
-                  )}
-                </div>
+                <Badge
+                  variant="outline"
+                  className="text-[11px] font-mono text-slate-400 border-slate-800 bg-slate-950/60 flex-shrink-0"
+                >
+                  {stack.hostName}
+                </Badge>
               </div>
             );
           })}
@@ -306,13 +232,6 @@ export const FleetStacksView: React.FC<FleetStacksViewProps> = ({
         container={selectedContainer}
         isOpen={Boolean(selectedContainer)}
         onClose={() => setSelectedContainer(null)}
-      />
-
-      {/* Import External Stack Dialog */}
-      <ImportStackDialog
-        stack={importingStack}
-        isOpen={Boolean(importingStack)}
-        onClose={() => setImportingStack(null)}
       />
     </div>
   );

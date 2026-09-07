@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { FleetContainer } from '../types';
-import { useFleetContainersQuery } from '../hooks/useFleetData';
+import { ClusterContainer } from '../types';
+import { useClusterContainersQuery } from '../hooks/useClusterData';
 import { ContainerDetailSheet } from './ContainerDetailSheet';
 import { GenerateComposeDialog } from './GenerateComposeDialog';
 import { Badge } from './ui/badge';
@@ -16,22 +16,22 @@ import {
   Loader2,
 } from 'lucide-react';
 
-interface FleetContainersViewProps {
+export interface ClusterContainersViewProps {
   selectedHostId?: string | null;
   searchQuery?: string;
 }
 
-export const FleetContainersView: React.FC<FleetContainersViewProps> = ({
+export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
   selectedHostId,
   searchQuery: initialSearch = '',
 }) => {
   const [stateFilter, setStateFilter] = useState<'all' | 'running' | 'exited' | 'paused'>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'standalone' | 'stack'>('all');
   const [localSearch, setLocalSearch] = useState('');
-  const [selectedContainer, setSelectedContainer] = useState<FleetContainer | null>(null);
-  const [generatingForContainer, setGeneratingForContainer] = useState<FleetContainer | null>(null);
+  const [selectedContainer, setSelectedContainer] = useState<ClusterContainer | null>(null);
+  const [generatingForContainer, setGeneratingForContainer] = useState<ClusterContainer | null>(null);
 
-  const { data: containers = [], isLoading, error } = useFleetContainersQuery(selectedHostId);
+  const { data: containers = [], isLoading, error } = useClusterContainersQuery(selectedHostId);
 
   const activeSearch = (initialSearch || localSearch).trim().toLowerCase();
 
@@ -186,7 +186,7 @@ export const FleetContainersView: React.FC<FleetContainersViewProps> = ({
       {isLoading ? (
         <div className="p-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
           <Loader2 className="w-6 h-6 animate-spin text-rose-500" />
-          <span>Scanning fleet containers...</span>
+          <span>Loading containers...</span>
         </div>
       ) : filteredContainers.length === 0 ? (
         <div className="p-12 border border-slate-800 rounded-xl text-center text-xs text-slate-500 bg-slate-950/40">

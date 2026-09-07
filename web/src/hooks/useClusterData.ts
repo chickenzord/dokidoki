@@ -2,8 +2,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { api } from '../services/api';
 import {
   Node,
-  FleetStack,
-  FleetContainer,
+  ClusterStack,
+  ClusterContainer,
   CreateStackRequest,
   StackFilesResponse,
   EnrichedContainerInspect,
@@ -30,12 +30,12 @@ export function useNodesQuery() {
   });
 }
 
-export function useFleetStacksQuery(selectedHostId?: string | null) {
+export function useClusterStacksQuery(selectedHostId?: string | null) {
   const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
 
   return useQuery({
-    queryKey: ['fleet-stacks', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
-    queryFn: async (): Promise<FleetStack[]> => {
+    queryKey: ['cluster-stacks', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
+    queryFn: async (): Promise<ClusterStack[]> => {
       // If nodes list is empty, try querying the local endpoint as bootstrap
       const targetNodes = nodes.length > 0
         ? (selectedHostId && selectedHostId !== 'all' ? nodes.filter(n => n.id === selectedHostId) : nodes)
@@ -54,7 +54,7 @@ export function useFleetStacksQuery(selectedHostId?: string | null) {
         })
       );
 
-      const allStacks: FleetStack[] = [];
+      const allStacks: ClusterStack[] = [];
       results.forEach((res) => {
         if (res.status === 'fulfilled') {
           allStacks.push(...res.value);
@@ -70,12 +70,12 @@ export function useFleetStacksQuery(selectedHostId?: string | null) {
   });
 }
 
-export function useFleetContainersQuery(selectedHostId?: string | null) {
+export function useClusterContainersQuery(selectedHostId?: string | null) {
   const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
 
   return useQuery({
-    queryKey: ['fleet-containers', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
-    queryFn: async (): Promise<FleetContainer[]> => {
+    queryKey: ['cluster-containers', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
+    queryFn: async (): Promise<ClusterContainer[]> => {
       const targetNodes = nodes.length > 0
         ? (selectedHostId && selectedHostId !== 'all' ? nodes.filter(n => n.id === selectedHostId) : nodes)
         : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
@@ -93,7 +93,7 @@ export function useFleetContainersQuery(selectedHostId?: string | null) {
         })
       );
 
-      const allContainers: FleetContainer[] = [];
+      const allContainers: ClusterContainer[] = [];
       results.forEach((res) => {
         if (res.status === 'fulfilled') {
           allContainers.push(...res.value);
@@ -147,8 +147,8 @@ export function useCreateStackMutation() {
       return api.createStack(data, hostEndpoint);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['fleet-stacks'] });
-      queryClient.invalidateQueries({ queryKey: ['fleet-containers'] });
+      queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
+      queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
     },
   });
 }
@@ -169,8 +169,8 @@ export function useUpdateStackMutation() {
       return api.updateStack(name, data, hostEndpoint);
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['fleet-stacks'] });
-      queryClient.invalidateQueries({ queryKey: ['fleet-containers'] });
+      queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
+      queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
       queryClient.invalidateQueries({ queryKey: ['stack-files'] });
     },
   });
@@ -179,7 +179,7 @@ export function useUpdateStackMutation() {
 export function useStackContainersQuery(hostEndpoint: string, stackName: string) {
   return useQuery({
     queryKey: ['stack-containers', hostEndpoint, stackName],
-    queryFn: async (): Promise<FleetContainer[]> => {
+    queryFn: async (): Promise<ClusterContainer[]> => {
       const containers = await api.getContainers(hostEndpoint, stackName);
       return containers.map((c) => ({
         ...c,

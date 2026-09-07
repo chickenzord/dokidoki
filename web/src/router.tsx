@@ -8,25 +8,25 @@ import {
 } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Navbar } from './components/Navbar';
-import { FleetStacksView } from './components/FleetStacksView';
-import { FleetContainersView } from './components/FleetContainersView';
-import { FleetNodesView } from './components/FleetNodesView';
+import { ClusterStacksView } from './components/ClusterStacksView';
+import { ClusterContainersView } from './components/ClusterContainersView';
+import { ClusterNodesView } from './components/ClusterNodesView';
 
-export interface FleetUIContextType {
+export interface ClusterUIContextType {
   selectedHostId: string | null;
   setSelectedHostId: (host: string | null) => void;
   searchQuery: string;
   setSearchQuery: (query: string) => void;
 }
 
-export const FleetUIContext = createContext<FleetUIContextType>({
+export const ClusterUIContext = createContext<ClusterUIContextType>({
   selectedHostId: null,
   setSelectedHostId: () => {},
   searchQuery: '',
   setSearchQuery: () => {},
 });
 
-export const useFleetUI = () => useContext(FleetUIContext);
+export const useClusterUI = () => useContext(ClusterUIContext);
 
 export const queryClient = new QueryClient({
   defaultOptions: {
@@ -50,7 +50,7 @@ function RootComponent() {
 
   return (
     <QueryClientProvider client={queryClient}>
-      <FleetUIContext.Provider
+      <ClusterUIContext.Provider
         value={{
           selectedHostId,
           setSelectedHostId,
@@ -71,7 +71,7 @@ function RootComponent() {
             <Outlet />
           </main>
         </div>
-      </FleetUIContext.Provider>
+      </ClusterUIContext.Provider>
     </QueryClientProvider>
   );
 }
@@ -105,7 +105,7 @@ const stacksRoute = createRoute({
 
 function StacksRouteComponent() {
   const search = stacksRoute.useSearch();
-  const { selectedHostId, searchQuery } = useFleetUI();
+  const { selectedHostId, searchQuery } = useClusterUI();
   const effectiveHost =
     search.host !== undefined
       ? search.host === 'all'
@@ -114,7 +114,7 @@ function StacksRouteComponent() {
       : selectedHostId;
 
   return (
-    <FleetStacksView
+    <ClusterStacksView
       selectedHostId={effectiveHost}
       searchQuery={searchQuery}
     />
@@ -138,7 +138,7 @@ const containersRoute = createRoute({
 
 function ContainersRouteComponent() {
   const search = containersRoute.useSearch();
-  const { selectedHostId, searchQuery } = useFleetUI();
+  const { selectedHostId, searchQuery } = useClusterUI();
   const effectiveHost =
     search.host !== undefined
       ? search.host === 'all'
@@ -147,7 +147,7 @@ function ContainersRouteComponent() {
       : selectedHostId;
 
   return (
-    <FleetContainersView
+    <ClusterContainersView
       selectedHostId={effectiveHost}
       searchQuery={searchQuery}
     />
@@ -157,7 +157,7 @@ function ContainersRouteComponent() {
 const nodesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/nodes',
-  component: FleetNodesView,
+  component: ClusterNodesView,
 });
 
 const routeTree = rootRoute.addChildren([

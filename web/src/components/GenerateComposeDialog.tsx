@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { FleetContainer } from '../types';
-import { useContainerComposeQuery, useCreateStackMutation } from '../hooks/useFleetData';
+import { ClusterContainer } from '../types';
+import { useContainerComposeQuery, useCreateStackMutation } from '../hooks/useClusterData';
 import {
   Dialog,
   DialogContent,
@@ -17,7 +17,7 @@ import { Server, FileCode, AlertCircle, CheckCircle2, Loader2, Sparkles } from '
 interface GenerateComposeDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  container: FleetContainer | null;
+  container: ClusterContainer | null;
 }
 
 export const GenerateComposeDialog: React.FC<GenerateComposeDialogProps> = ({

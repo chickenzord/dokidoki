@@ -1,6 +1,6 @@
 import React from 'react';
 import { Link, useRouterState } from '@tanstack/react-router';
-import { useNodesQuery } from '../hooks/useFleetData';
+import { useNodesQuery } from '../hooks/useClusterData';
 import {
   DropdownMenu,
   DropdownMenuTrigger,
@@ -120,7 +120,7 @@ export const Navbar: React.FC<NavbarProps> = ({
 
             <DropdownMenuContent align="end" className="w-64 bg-slate-900 border-slate-800 text-slate-200">
               <DropdownMenuLabel className="text-[11px] font-semibold text-slate-400 uppercase tracking-wider">
-                Fleet Host Filter
+                Cluster Nodes
               </DropdownMenuLabel>
 
               <DropdownMenuItem
@@ -131,7 +131,7 @@ export const Navbar: React.FC<NavbarProps> = ({
                   <Globe className="w-3.5 h-3.5 text-slate-400" />
                   <div>
                     <div className="font-semibold text-slate-100">All Hosts</div>
-                    <div className="text-[10px] text-slate-500">Unified peer cluster mesh</div>
+                    <div className="text-[10px] text-slate-500">All cluster nodes</div>
                   </div>
                 </div>
                 {!selectedHostId && <Check className="w-4 h-4 text-rose-400" />}
@@ -178,7 +178,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             <Input
               value={searchQuery}
               onChange={(e) => onSearchChange(e.target.value)}
-              placeholder="Search fleet..."
+              placeholder="Search cluster..."
               className="h-8 pl-8 pr-2.5 text-xs bg-slate-900 border-slate-800 w-44 lg:w-56 focus:ring-rose-500 text-slate-200"
             />
           </div>
@@ -190,7 +190,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             onClick={onRefresh}
             disabled={isRefreshing}
             className="h-8 w-8 p-0 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-400 hover:text-white"
-            title="Refresh fleet data"
+            title="Refresh data"
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-rose-500' : ''}`} />
           </Button>

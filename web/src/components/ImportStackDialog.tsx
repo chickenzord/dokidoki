@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { FleetStack } from '../types';
-import { useCreateStackMutation, useStackFilesQuery } from '../hooks/useFleetData';
+import { ClusterStack } from '../types';
+import { useCreateStackMutation, useStackFilesQuery } from '../hooks/useClusterData';
 import {
   Dialog,
   DialogContent,
@@ -17,7 +17,7 @@ import { Server, FileCode, AlertCircle, CheckCircle2, Loader2 } from 'lucide-rea
 interface ImportStackDialogProps {
   isOpen: boolean;
   onClose: () => void;
-  stack: FleetStack | null;
+  stack: ClusterStack | null;
 }
 
 export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({

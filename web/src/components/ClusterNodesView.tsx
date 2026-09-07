@@ -1,10 +1,10 @@
 import React from 'react';
-import { useNodesQuery } from '../hooks/useFleetData';
+import { useNodesQuery } from '../hooks/useClusterData';
 import { Badge } from './ui/badge';
 import { Server, Radio, Globe, Tag, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
 import { Button } from './ui/button';
 
-export const FleetNodesView: React.FC = () => {
+export const ClusterNodesView: React.FC = () => {
   const { data: nodes = [], isLoading, error, refetch, isFetching } = useNodesQuery();
 
   const aliveCount = nodes.filter((n) => n.status === 'alive').length;
@@ -16,10 +16,10 @@ export const FleetNodesView: React.FC = () => {
         <div>
           <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
             <Server className="w-5 h-5 text-rose-500" />
-            Cluster Peer Nodes
+            Cluster Nodes
           </h2>
           <p className="text-xs text-slate-400 mt-0.5">
-            Decentralized peer-to-peer fleet mesh. All nodes operate as equal cluster members.
+            All nodes operate as equal cluster members.
           </p>
         </div>
 
@@ -50,11 +50,11 @@ export const FleetNodesView: React.FC = () => {
       {isLoading ? (
         <div className="p-12 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
           <Loader2 className="w-6 h-6 animate-spin text-rose-500" />
-          <span>Discovering peer nodes...</span>
+          <span>Discovering nodes...</span>
         </div>
       ) : nodes.length === 0 ? (
         <div className="p-12 border border-slate-800 rounded-xl text-center text-xs text-slate-500 bg-slate-950/40">
-          No peer nodes discovered in the mesh yet.
+          No nodes discovered in the cluster yet.
         </div>
       ) : (
         <div className="border border-slate-800 rounded-xl overflow-hidden bg-slate-950/40">
@@ -63,7 +63,7 @@ export const FleetNodesView: React.FC = () => {
               <tr>
                 <th className="p-3.5">Node Name</th>
                 <th className="p-3.5">Status</th>
-                <th className="p-3.5">Mesh Addresses</th>
+                <th className="p-3.5">Addresses</th>
                 <th className="p-3.5">Dokidoki Version</th>
                 <th className="p-3.5">Node ID</th>
               </tr>

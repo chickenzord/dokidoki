@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { FleetStack } from '../types';
-import { useStackFilesQuery, useStackContainersQuery } from '../hooks/useFleetData';
+import { ClusterStack } from '../types';
+import { useStackFilesQuery, useStackContainersQuery } from '../hooks/useClusterData';
 import {
   Sheet,
   SheetContent,
@@ -25,7 +25,7 @@ import {
 } from 'lucide-react';
 
 interface StackDetailSheetProps {
-  stack: FleetStack | null;
+  stack: ClusterStack | null;
   isOpen: boolean;
   onClose: () => void;
   onSelectContainer?: (containerId: string, hostEndpoint: string) => void;

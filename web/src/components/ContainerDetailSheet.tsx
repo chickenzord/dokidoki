@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
-import { FleetContainer } from '../types';
-import { useContainerInspectQuery } from '../hooks/useFleetData';
+import { ClusterContainer } from '../types';
+import { useContainerInspectQuery } from '../hooks/useClusterData';
 import {
   Sheet,
   SheetContent,
@@ -28,7 +28,7 @@ import {
 } from 'lucide-react';
 
 interface ContainerDetailSheetProps {
-  container: FleetContainer | null;
+  container: ClusterContainer | null;
   isOpen: boolean;
   onClose: () => void;
 }
