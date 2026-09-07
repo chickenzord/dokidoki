@@ -29,6 +29,7 @@ type Manager struct {
 	peers        map[string]*model.Node
 	clusterToken string
 	ttl          time.Duration
+	stacksDir    string
 	providers    []DiscoveryProvider
 	httpClient   *http.Client
 
@@ -38,7 +39,9 @@ type Manager struct {
 }
 
 // NewManager creates an initialized cluster Manager.
-func NewManager(self model.Node, clusterToken string, ttl time.Duration, httpClient *http.Client) *Manager {
+// If stacksDir is provided, previously discovered nodes are loaded from $stacksDir/.dokidoki/nodes.json,
+// and subsequent cluster changes will be persisted to that file.
+func NewManager(self model.Node, clusterToken string, ttl time.Duration, httpClient *http.Client, stacksDir string) *Manager {
 	if ttl <= 0 {
 		ttl = 30 * time.Second
 	}
@@ -51,11 +54,34 @@ func NewManager(self model.Node, clusterToken string, ttl time.Duration, httpCli
 	self.IsSelf = true
 	self.Status = model.NodeStatusAlive
 
+	peers := make(map[string]*model.Node)
+	if stacksDir != "" {
+		if loaded, err := LoadPersistedNodes(stacksDir); err == nil {
+			for _, n := range loaded {
+				if n.ID == "" || n.ID == self.ID {
+					continue
+				}
+				nodeCopy := n
+				nodeCopy.IsSelf = false
+				if nodeCopy.Status == model.NodeStatusAlive {
+					nodeCopy.Status = model.NodeStatusSuspect
+				}
+				peers[nodeCopy.ID] = &nodeCopy
+			}
+			if len(peers) > 0 {
+				logger.Infof("Cluster: loaded %d persisted peer(s) from %s", len(peers), NodesFilePath(stacksDir))
+			}
+		} else {
+			logger.Warnf("Cluster: failed to load persisted nodes: %v", err)
+		}
+	}
+
 	return &Manager{
 		self:         self,
-		peers:        make(map[string]*model.Node),
+		peers:        peers,
 		clusterToken: clusterToken,
 		ttl:          ttl,
+		stacksDir:    stacksDir,
 		httpClient:   httpClient,
 	}
 }
@@ -180,13 +206,21 @@ func (m *Manager) EvictExpiredPeers() {
 	defer m.mu.Unlock()
 
 	now := time.Now()
+	changed := false
 	for _, peer := range m.peers {
+		prevStatus := peer.Status
 		age := now.Sub(peer.LastSeen)
 		if age > m.ttl {
 			peer.Status = model.NodeStatusOffline
 		} else if age > m.ttl/2 {
 			peer.Status = model.NodeStatusSuspect
 		}
+		if peer.Status != prevStatus {
+			changed = true
+		}
+	}
+	if changed {
+		m.savePeersLocked()
 	}
 }
 
@@ -198,16 +232,22 @@ func (m *Manager) handlePeerEvent(ev PeerEvent) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	changed := false
 	switch ev.Type {
 	case EventDiscovered, EventUpdated:
 		if peer, ok := m.peers[ev.NodeID]; ok {
 			peer.LastSeen = time.Now()
-			peer.Status = model.NodeStatusAlive
-			if ev.Name != "" {
-				peer.Name = ev.Name
+			if peer.Status != model.NodeStatusAlive {
+				peer.Status = model.NodeStatusAlive
+				changed = true
 			}
-			if len(ev.Addresses) > 0 {
+			if ev.Name != "" && peer.Name != ev.Name {
+				peer.Name = ev.Name
+				changed = true
+			}
+			if len(ev.Addresses) > 0 && !equalStrings(peer.Addresses, ev.Addresses) {
 				peer.Addresses = ev.Addresses
+				changed = true
 			}
 		} else {
 			m.peers[ev.NodeID] = &model.Node{
@@ -217,11 +257,19 @@ func (m *Manager) handlePeerEvent(ev PeerEvent) {
 				Status:    model.NodeStatusAlive,
 				LastSeen:  time.Now(),
 			}
+			changed = true
 		}
 	case EventLost:
 		if peer, ok := m.peers[ev.NodeID]; ok {
-			peer.Status = model.NodeStatusOffline
+			if peer.Status != model.NodeStatusOffline {
+				peer.Status = model.NodeStatusOffline
+				changed = true
+			}
 		}
+	}
+
+	if changed {
+		m.savePeersLocked()
 	}
 }
 
@@ -238,6 +286,7 @@ func (m *Manager) Stop() error {
 	for _, p := range m.peers {
 		peersToNotify = append(peersToNotify, *p)
 	}
+	m.savePeersLocked()
 	m.mu.Unlock()
 
 	for _, p := range providers {
@@ -296,15 +345,24 @@ func (m *Manager) HandleHandshake(req model.HandshakeRequest) (*model.HandshakeR
 	defer m.mu.Unlock()
 
 	if req.NodeID != m.self.ID {
-		m.peers[req.NodeID] = &model.Node{
-			ID:        req.NodeID,
-			Name:      req.Name,
-			Addresses: req.Addresses,
-			Status:    model.NodeStatusAlive,
-			Version:   req.Version,
-			IsSelf:    false,
-			LastSeen:  time.Now(),
+		if peer, ok := m.peers[req.NodeID]; ok {
+			peer.LastSeen = time.Now()
+			peer.Status = model.NodeStatusAlive
+			peer.Name = req.Name
+			peer.Addresses = req.Addresses
+			peer.Version = req.Version
+		} else {
+			m.peers[req.NodeID] = &model.Node{
+				ID:        req.NodeID,
+				Name:      req.Name,
+				Addresses: req.Addresses,
+				Status:    model.NodeStatusAlive,
+				Version:   req.Version,
+				IsSelf:    false,
+				LastSeen:  time.Now(),
+			}
 		}
+		m.savePeersLocked()
 	}
 
 	knownPeers := make([]model.Node, 0, len(m.peers)+1)
@@ -344,11 +402,16 @@ func (m *Manager) HandleHeartbeat(msg model.HeartbeatMessage) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 
+	changed := false
 	if peer, ok := m.peers[msg.NodeID]; ok {
 		peer.LastSeen = time.Now()
-		peer.Status = model.NodeStatusAlive
-		if len(msg.Addresses) > 0 {
+		if peer.Status != model.NodeStatusAlive {
+			peer.Status = model.NodeStatusAlive
+			changed = true
+		}
+		if len(msg.Addresses) > 0 && !equalStrings(peer.Addresses, msg.Addresses) {
 			peer.Addresses = msg.Addresses
+			changed = true
 		}
 	} else {
 		m.peers[msg.NodeID] = &model.Node{
@@ -357,6 +420,7 @@ func (m *Manager) HandleHeartbeat(msg model.HeartbeatMessage) error {
 			Status:    model.NodeStatusAlive,
 			LastSeen:  time.Now(),
 		}
+		changed = true
 	}
 
 	// PEX merge for newly learned peers
@@ -367,6 +431,7 @@ func (m *Manager) HandleHeartbeat(msg model.HeartbeatMessage) error {
 		if existing, ok := m.peers[kp.ID]; ok {
 			if len(existing.Addresses) == 0 && len(kp.Addresses) > 0 {
 				existing.Addresses = kp.Addresses
+				changed = true
 			}
 		} else {
 			newNode := kp
@@ -378,7 +443,12 @@ func (m *Manager) HandleHeartbeat(msg model.HeartbeatMessage) error {
 				newNode.LastSeen = time.Now()
 			}
 			m.peers[kp.ID] = &newNode
+			changed = true
 		}
+	}
+
+	if changed {
+		m.savePeersLocked()
 	}
 
 	return nil
@@ -390,6 +460,7 @@ func (m *Manager) HandleLeave(nodeID string) {
 	defer m.mu.Unlock()
 	if peer, ok := m.peers[nodeID]; ok {
 		peer.Status = model.NodeStatusOffline
+		m.savePeersLocked()
 	}
 }
 
@@ -407,5 +478,35 @@ func (m *Manager) RemoveNode(nodeID string) error {
 	}
 
 	delete(m.peers, nodeID)
+	m.savePeersLocked()
 	return nil
+}
+
+func (m *Manager) savePeersLocked() {
+	if m.stacksDir == "" {
+		return
+	}
+	peers := make([]model.Node, 0, len(m.peers))
+	for _, p := range m.peers {
+		if p.ID == m.self.ID || p.IsSelf {
+			continue
+		}
+		peers = append(peers, *p)
+	}
+
+	if err := SavePersistedNodes(m.stacksDir, peers); err != nil {
+		logger.Warnf("Cluster: failed to persist discovered nodes: %v", err)
+	}
+}
+
+func equalStrings(a, b []string) bool {
+	if len(a) != len(b) {
+		return false
+	}
+	for i := range a {
+		if a[i] != b[i] {
+			return false
+		}
+	}
+	return true
 }

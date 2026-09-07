@@ -104,7 +104,7 @@ func main() {
 		IsSelf:    true,
 	}
 
-	clusterManager := cluster.NewManager(self, cfg.ClusterToken, 30*time.Second, nil)
+	clusterManager := cluster.NewManager(self, cfg.ClusterToken, 30*time.Second, nil, cfg.StacksDir)
 
 	// Register discovery providers
 	if len(cfg.Peers) > 0 {

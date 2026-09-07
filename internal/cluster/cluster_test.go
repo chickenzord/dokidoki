@@ -169,7 +169,7 @@ func TestManagerPeerRegistration(t *testing.T) {
 		Version:   "0.1.0",
 	}
 
-	mgr := NewManager(selfNode, "test-token", 30*time.Second, nil)
+	mgr := NewManager(selfNode, "test-token", 30*time.Second, nil, "")
 
 	// Verify Self
 	self := mgr.Self()
@@ -243,7 +243,7 @@ func TestManagerTTLEviction(t *testing.T) {
 		Name: "Self",
 	}
 	ttl := 100 * time.Millisecond
-	mgr := NewManager(selfNode, "", ttl, nil)
+	mgr := NewManager(selfNode, "", ttl, nil, "")
 
 	// Add peer
 	peerID := "peer-expiring"
@@ -303,7 +303,7 @@ func TestManagerTokenValidation(t *testing.T) {
 	validToken := "cluster-secret-key"
 
 	t.Run("TokenEnforced", func(t *testing.T) {
-		mgr := NewManager(selfNode, validToken, 30*time.Second, nil)
+		mgr := NewManager(selfNode, validToken, 30*time.Second, nil, "")
 
 		// 1. Handshake with valid token
 		_, err := mgr.HandleHandshake(model.HandshakeRequest{
@@ -355,7 +355,7 @@ func TestManagerTokenValidation(t *testing.T) {
 	})
 
 	t.Run("OpenClusterNoTokenRequired", func(t *testing.T) {
-		mgr := NewManager(selfNode, "", 30*time.Second, nil)
+		mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
 
 		// Handshake with empty token succeeds
 		_, err := mgr.HandleHandshake(model.HandshakeRequest{
@@ -378,7 +378,7 @@ func TestManagerTokenValidation(t *testing.T) {
 
 func TestPEXMerge(t *testing.T) {
 	selfNode := model.Node{ID: "self", Name: "Self"}
-	mgr := NewManager(selfNode, "", 30*time.Second, nil)
+	mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
 
 	// Heartbeat introduces sender node and peer-3 via KnownPeers
 	err := mgr.HandleHeartbeat(model.HeartbeatMessage{
@@ -548,7 +548,7 @@ func TestManagerLifecycleAndEventConsumption(t *testing.T) {
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
 
-	mgr := NewManager(selfNode, "", 200*time.Millisecond, nil)
+	mgr := NewManager(selfNode, "", 200*time.Millisecond, nil, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -589,5 +589,68 @@ func TestManagerLifecycleAndEventConsumption(t *testing.T) {
 	}
 	if _, ok := mgr.GetNode("peer-event-1"); ok {
 		t.Errorf("expected peer-event-1 to be removed after RemoveNode")
+	}
+}
+
+func TestManagerPeerPersistence(t *testing.T) {
+	tempDir := t.TempDir()
+
+	selfNode := model.Node{
+		ID:        "self-persistence",
+		Name:      "Self Persistence",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+
+	mgr1 := NewManager(selfNode, "", 30*time.Second, nil, tempDir)
+
+	// Add peer via handshake
+	_, err := mgr1.HandleHandshake(model.HandshakeRequest{
+		NodeID:    "peer-discovered-1",
+		Name:      "Discovered 1",
+		Addresses: []string{"http://192.168.1.100:8080"},
+		Version:   "0.1.0",
+	})
+	if err != nil {
+		t.Fatalf("handshake error: %v", err)
+	}
+
+	// Verify file was written
+	persisted, err := LoadPersistedNodes(tempDir)
+	if err != nil {
+		t.Fatalf("failed to load persisted nodes: %v", err)
+	}
+	if len(persisted) != 1 || persisted[0].ID != "peer-discovered-1" {
+		t.Fatalf("unexpected persisted nodes: %+v", persisted)
+	}
+
+	// Stop mgr1 (simulating shutdown)
+	if err := mgr1.Stop(); err != nil {
+		t.Fatalf("stop error: %v", err)
+	}
+
+	// Start mgr2 with the same tempDir (simulating restart)
+	mgr2 := NewManager(selfNode, "", 30*time.Second, nil, tempDir)
+
+	// Verify peer was restored on mgr2
+	peer, ok := mgr2.GetNode("peer-discovered-1")
+	if !ok {
+		t.Fatalf("expected peer-discovered-1 to be restored from persistence")
+	}
+	if peer.Name != "Discovered 1" || len(peer.Addresses) != 1 || peer.Addresses[0] != "http://192.168.1.100:8080" {
+		t.Errorf("unexpected restored peer data: %+v", peer)
+	}
+
+	// Remove node
+	if err := mgr2.RemoveNode("peer-discovered-1"); err != nil {
+		t.Fatalf("remove error: %v", err)
+	}
+
+	// Verify file updated after removal
+	persistedAfterRemove, err := LoadPersistedNodes(tempDir)
+	if err != nil {
+		t.Fatalf("failed to load after remove: %v", err)
+	}
+	if len(persistedAfterRemove) != 0 {
+		t.Fatalf("expected 0 persisted nodes after remove, got: %d", len(persistedAfterRemove))
 	}
 }

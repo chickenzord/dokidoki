@@ -593,7 +593,7 @@ func setupClusterTestServer(t *testing.T, token string) (http.Handler, *cluster.
 		Status:    model.NodeStatusAlive,
 	}
 
-	cm := cluster.NewManager(self, token, 30*time.Second, nil)
+	cm := cluster.NewManager(self, token, 30*time.Second, nil, tempDir)
 	scanner := stacks.NewScanner(tempDir)
 	server := NewServer(cfg, m, scanner, cm, "")
 	return server.Routes(), cm
