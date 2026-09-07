@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 
+	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/stacks"
@@ -14,14 +15,15 @@ import (
 
 // Server holds dependencies for the REST API.
 type Server struct {
-	cfg       *config.Config
-	dockerCli docker.Client
-	scanner   *stacks.Scanner
-	stacksDir string
+	cfg            *config.Config
+	dockerCli      docker.Client
+	scanner        *stacks.Scanner
+	stacksDir      string
+	clusterManager *cluster.Manager
 }
 
 // NewServer creates a new API Server instance.
-func NewServer(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner) *Server {
+func NewServer(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager) *Server {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
@@ -29,16 +31,17 @@ func NewServer(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scan
 		scanner = stacks.NewScanner(cfg.StacksDir)
 	}
 	return &Server{
-		cfg:       cfg,
-		dockerCli: dockerCli,
-		scanner:   scanner,
-		stacksDir: cfg.StacksDir,
+		cfg:            cfg,
+		dockerCli:      dockerCli,
+		scanner:        scanner,
+		stacksDir:      cfg.StacksDir,
+		clusterManager: clusterManager,
 	}
 }
 
 // NewRouter creates and configures the chi Router for Dokidoki.
-func NewRouter(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner) http.Handler {
-	s := NewServer(cfg, dockerCli, scanner)
+func NewRouter(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager) http.Handler {
+	s := NewServer(cfg, dockerCli, scanner, clusterManager)
 	return s.Routes()
 }
 
@@ -73,6 +76,14 @@ func (s *Server) Routes() http.Handler {
 		// Host routes
 		r.Get("/host", s.handleHostInfo)
 		r.Get("/host/ping", s.handlePing)
+
+		// Cluster routes
+		r.Get("/nodes", s.handleListNodes)
+		r.Get("/nodes/{id}", s.handleGetNode)
+		r.Delete("/nodes/{id}", s.handleDeleteNode)
+		r.Post("/cluster/handshake", s.handleHandshake)
+		r.Post("/cluster/heartbeat", s.handleHeartbeat)
+		r.Post("/cluster/leave", s.handleLeave)
 	})
 
 	return r

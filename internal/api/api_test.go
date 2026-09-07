@@ -1,6 +1,7 @@
 package api
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,7 +10,9 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 
+	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/model"
 	"github.com/chickenzord/dokidoki/internal/stacks"
@@ -86,7 +89,7 @@ func setupTestServer(t *testing.T, m *mockDocker) (http.Handler, string) {
 	}
 
 	scanner := stacks.NewScanner(tempDir)
-	server := NewServer(cfg, m, scanner)
+	server := NewServer(cfg, m, scanner, nil)
 	return server.Routes(), tempDir
 }
 
@@ -524,3 +527,305 @@ func TestCORS(t *testing.T) {
 		t.Fatalf("expected CORS allow origin, got %q", origin)
 	}
 }
+
+func setupClusterTestServer(t *testing.T, token string) (http.Handler, *cluster.Manager) {
+	m := &mockDocker{}
+	tempDir := t.TempDir()
+
+	cfg := &config.Config{
+		Bind:         "127.0.0.1",
+		Port:         8080,
+		StacksDir:    tempDir,
+		ClusterToken: token,
+	}
+
+	self := model.Node{
+		ID:        "node-self",
+		Name:      "self-node",
+		Addresses: []string{"http://127.0.0.1:8080"},
+		Version:   "0.1.0",
+		Status:    model.NodeStatusAlive,
+	}
+
+	cm := cluster.NewManager(self, token, 30*time.Second, nil)
+	scanner := stacks.NewScanner(tempDir)
+	server := NewServer(cfg, m, scanner, cm)
+	return server.Routes(), cm
+}
+
+func TestClusterNodes(t *testing.T) {
+	t.Run("NilClusterManager", func(t *testing.T) {
+		m := &mockDocker{}
+		handler, _ := setupTestServer(t, m)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var nodes []model.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &nodes); err != nil {
+			t.Fatalf("failed to decode JSON: %v", err)
+		}
+		if len(nodes) != 0 {
+			t.Fatalf("expected 0 nodes, got %d", len(nodes))
+		}
+
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes/any-id", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+		var errResp map[string]string
+		_ = json.Unmarshal(w.Body.Bytes(), &errResp)
+		if errResp["error"] != "node not found" {
+			t.Fatalf("expected 'node not found', got %q", errResp["error"])
+		}
+	})
+
+	t.Run("WithClusterManager", func(t *testing.T) {
+		handler, cm := setupClusterTestServer(t, "test-token")
+
+		// Register a remote peer via handshake
+		_, _ = cm.HandleHandshake(model.HandshakeRequest{
+			NodeID:       "node-peer-1",
+			Name:         "peer-1",
+			Addresses:    []string{"http://192.168.1.10:8080"},
+			Version:      "0.1.0",
+			ClusterToken: "test-token",
+		})
+
+		// 1. List nodes
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var nodes []model.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &nodes); err != nil {
+			t.Fatalf("failed to decode JSON: %v", err)
+		}
+		if len(nodes) != 2 {
+			t.Fatalf("expected 2 nodes, got %d", len(nodes))
+		}
+
+		// 2. Get existing self node
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-self", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for self node, got %d", w.Code)
+		}
+		var selfNode model.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &selfNode); err != nil {
+			t.Fatal(err)
+		}
+		if selfNode.ID != "node-self" || !selfNode.IsSelf {
+			t.Fatalf("unexpected self node: %+v", selfNode)
+		}
+
+		// 3. Get existing peer node
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes/node-peer-1", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for peer node, got %d", w.Code)
+		}
+		var peerNode model.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &peerNode); err != nil {
+			t.Fatal(err)
+		}
+		if peerNode.ID != "node-peer-1" || peerNode.Name != "peer-1" {
+			t.Fatalf("unexpected peer node: %+v", peerNode)
+		}
+
+		// 4. Get non-existent node
+		req = httptest.NewRequest(http.MethodGet, "/api/v1/nodes/non-existent", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+		var errResp map[string]string
+		_ = json.Unmarshal(w.Body.Bytes(), &errResp)
+		if errResp["error"] != "node not found" {
+			t.Fatalf("expected 'node not found', got %q", errResp["error"])
+		}
+	})
+}
+
+func TestClusterHandshake(t *testing.T) {
+	handler, _ := setupClusterTestServer(t, "valid-token")
+
+	// 1. Successful handshake
+	hsReq := model.HandshakeRequest{
+		NodeID:       "node-incoming",
+		Name:         "node-incoming",
+		Addresses:    []string{"http://10.0.0.5:8080"},
+		Version:      "0.1.0",
+		ClusterToken: "valid-token",
+	}
+	body, _ := json.Marshal(hsReq)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/handshake", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var hsResp model.HandshakeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &hsResp); err != nil {
+		t.Fatalf("failed to unmarshal HandshakeResponse: %v", err)
+	}
+	if hsResp.NodeID != "node-self" {
+		t.Fatalf("expected response NodeID 'node-self', got %q", hsResp.NodeID)
+	}
+
+	// 2. Handshake with invalid token -> 401
+	hsReq.ClusterToken = "wrong-token"
+	body, _ = json.Marshal(hsReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/handshake", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid token, got %d", w.Code)
+	}
+
+	// 3. Handshake with invalid JSON -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/handshake", bytes.NewReader([]byte("not-json")))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for bad JSON, got %d", w.Code)
+	}
+
+	// 4. Handshake with empty node_id -> 400
+	hsReq.NodeID = ""
+	hsReq.ClusterToken = "valid-token"
+	body, _ = json.Marshal(hsReq)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/handshake", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty node_id, got %d", w.Code)
+	}
+}
+
+func TestClusterHeartbeat(t *testing.T) {
+	handler, _ := setupClusterTestServer(t, "hb-token")
+
+	// 1. Successful heartbeat
+	hbMsg := model.HeartbeatMessage{
+		NodeID:       "node-peer-hb",
+		Addresses:    []string{"http://10.0.0.6:8080"},
+		ClusterToken: "hb-token",
+	}
+	body, _ := json.Marshal(hbMsg)
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/heartbeat", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["status"] != "ok" {
+		t.Fatalf("expected status 'ok', got %q", resp["status"])
+	}
+
+	// 2. Heartbeat with invalid token -> 401
+	hbMsg.ClusterToken = "invalid-token"
+	body, _ = json.Marshal(hbMsg)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/heartbeat", bytes.NewReader(body))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 for invalid token, got %d", w.Code)
+	}
+
+	// 3. Heartbeat with invalid JSON -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/heartbeat", bytes.NewReader([]byte("corrupt")))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for corrupt JSON, got %d", w.Code)
+	}
+}
+
+func TestClusterLeave(t *testing.T) {
+	handler, cm := setupClusterTestServer(t, "")
+
+	// Handshake to add a peer
+	_, _ = cm.HandleHandshake(model.HandshakeRequest{
+		NodeID:    "node-to-leave",
+		Name:      "leaving-node",
+		Addresses: []string{"http://10.0.0.9:8080"},
+	})
+	if _, ok := cm.GetNode("node-to-leave"); !ok {
+		t.Fatal("expected peer to be present before leave")
+	}
+
+	// 1. Leave with JSON body
+	leaveBody, _ := json.Marshal(map[string]string{"node_id": "node-to-leave"})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/leave", bytes.NewReader(leaveBody))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &resp)
+	if resp["status"] != "ok" {
+		t.Fatalf("expected status 'ok', got %q", resp["status"])
+	}
+
+	peer, ok := cm.GetNode("node-to-leave")
+	if !ok {
+		t.Fatal("expected peer to still exist after leave")
+	}
+	if peer.Status != model.NodeStatusOffline {
+		t.Fatalf("expected peer status to be offline after leave, got %s", peer.Status)
+	}
+
+	// 2. Missing node_id -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/leave", bytes.NewReader([]byte("{}")))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty node_id, got %d", w.Code)
+	}
+
+	// 3. Manual DELETE /api/v1/nodes/{id}
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/node-to-leave", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 on DELETE /api/v1/nodes/node-to-leave, got %d: %s", w.Code, w.Body.String())
+	}
+	if _, ok := cm.GetNode("node-to-leave"); ok {
+		t.Fatal("expected peer to be permanently removed after DELETE")
+	}
+
+	// 4. Delete non-existent node -> 404
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/non-existent", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for non-existent node, got %d", w.Code)
+	}
+}
+
