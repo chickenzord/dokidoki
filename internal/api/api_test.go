@@ -14,8 +14,8 @@ import (
 
 	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/config"
-	"github.com/chickenzord/dokidoki/internal/model"
-	"github.com/chickenzord/dokidoki/internal/stacks"
+	"github.com/chickenzord/dokidoki/internal/docker"
+	"github.com/chickenzord/dokidoki/internal/stack"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/system"
@@ -92,8 +92,9 @@ func setupTestServerWithSelf(t *testing.T, m *mockDocker, selfContainerID string
 		StacksDir: tempDir,
 	}
 
-	scanner := stacks.NewScanner(tempDir)
-	server := NewServer(cfg, m, scanner, nil, selfContainerID)
+	scanner := stack.NewScanner(tempDir)
+	stackSvc := stack.NewService(scanner, m, selfContainerID)
+	server := NewServer(cfg, m, stackSvc, nil, selfContainerID)
 	return server.Routes(), tempDir
 }
 
@@ -105,8 +106,8 @@ func sampleContainers() []types.Container {
 			Image: "nginx:latest",
 			State: "running",
 			Labels: map[string]string{
-				model.ComposeProjectLabel: "web-stack",
-				model.ComposeServiceLabel: "web",
+				docker.ComposeProjectLabel: "web-stack",
+				docker.ComposeServiceLabel: "web",
 			},
 		},
 		{
@@ -115,8 +116,8 @@ func sampleContainers() []types.Container {
 			Image: "postgres:latest",
 			State: "running",
 			Labels: map[string]string{
-				model.ComposeProjectLabel: "external-stack",
-				model.ComposeServiceLabel: "db",
+				docker.ComposeProjectLabel: "external-stack",
+				docker.ComposeServiceLabel: "db",
 			},
 		},
 		{
@@ -144,7 +145,7 @@ func TestListStacks(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var stacksAll []model.StackSummary
+	var stacksAll []stack.Summary
 	if err := json.Unmarshal(w.Body.Bytes(), &stacksAll); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
 	}
@@ -160,7 +161,7 @@ func TestListStacks(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var stacksManaged []model.StackSummary
+	var stacksManaged []stack.Summary
 	if err := json.Unmarshal(w.Body.Bytes(), &stacksManaged); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
 	}
@@ -176,7 +177,7 @@ func TestListStacks(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var stacksExt []model.StackSummary
+	var stacksExt []stack.Summary
 	if err := json.Unmarshal(w.Body.Bytes(), &stacksExt); err != nil {
 		t.Fatalf("failed to unmarshal JSON: %v", err)
 	}
@@ -210,7 +211,7 @@ func TestGetStack(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var detail model.StackDetail
+	var detail stack.Detail
 	if err := json.Unmarshal(w.Body.Bytes(), &detail); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -249,7 +250,7 @@ func TestGetStackCompose(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var resp model.ComposeFileResponse
+	var resp stack.ComposeResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -299,7 +300,7 @@ func TestGetStackContainers(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var containers []model.ContainerSummary
+	var containers []docker.Container
 	if err := json.Unmarshal(w.Body.Bytes(), &containers); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -333,7 +334,7 @@ func TestListContainers(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var flat []model.ContainerSummary
+	var flat []docker.Container
 	if err := json.Unmarshal(w.Body.Bytes(), &flat); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -349,7 +350,7 @@ func TestListContainers(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var filtered []model.ContainerSummary
+	var filtered []docker.Container
 	if err := json.Unmarshal(w.Body.Bytes(), &filtered); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -365,7 +366,7 @@ func TestListContainers(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var grouped model.GroupedContainers
+	var grouped stack.Grouped
 	if err := json.Unmarshal(w.Body.Bytes(), &grouped); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -382,7 +383,7 @@ func TestListContainers(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var flatWithSelf []model.ContainerSummary
+	var flatWithSelf []docker.Container
 	if err := json.Unmarshal(w.Body.Bytes(), &flatWithSelf); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -407,8 +408,8 @@ func TestInspectContainer(t *testing.T) {
 					},
 					Config: &container.Config{
 						Labels: map[string]string{
-							model.ComposeProjectLabel: "web-stack",
-							model.ComposeServiceLabel: "web",
+							docker.ComposeProjectLabel: "web-stack",
+							docker.ComposeServiceLabel: "web",
 						},
 					},
 				}, nil
@@ -503,7 +504,7 @@ func TestHostInfo(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", w.Code)
 	}
-	var hostInfo model.HostInfo
+	var hostInfo HostInfo
 	if err := json.Unmarshal(w.Body.Bytes(), &hostInfo); err != nil {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
@@ -585,17 +586,18 @@ func setupClusterTestServer(t *testing.T, token string) (http.Handler, *cluster.
 		ClusterToken: token,
 	}
 
-	self := model.Node{
+	self := cluster.Node{
 		ID:        "node-self",
 		Name:      "self-node",
 		Addresses: []string{"http://127.0.0.1:8080"},
 		Version:   "0.1.0",
-		Status:    model.NodeStatusAlive,
+		Status:    cluster.StatusAlive,
 	}
 
 	cm := cluster.NewManager(self, token, 30*time.Second, nil, tempDir)
-	scanner := stacks.NewScanner(tempDir)
-	server := NewServer(cfg, m, scanner, cm, "")
+	scanner := stack.NewScanner(tempDir)
+	stackSvc := stack.NewService(scanner, m, "")
+	server := NewServer(cfg, m, stackSvc, cm, "")
 	return server.Routes(), cm
 }
 
@@ -611,7 +613,7 @@ func TestClusterNodes(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", w.Code)
 		}
-		var nodes []model.Node
+		var nodes []cluster.Node
 		if err := json.Unmarshal(w.Body.Bytes(), &nodes); err != nil {
 			t.Fatalf("failed to decode JSON: %v", err)
 		}
@@ -636,7 +638,7 @@ func TestClusterNodes(t *testing.T) {
 		handler, cm := setupClusterTestServer(t, "test-token")
 
 		// Register a remote peer via handshake
-		_, _ = cm.HandleHandshake(model.HandshakeRequest{
+		_, _ = cm.HandleHandshake(cluster.HandshakeRequest{
 			NodeID:       "node-peer-1",
 			Name:         "peer-1",
 			Addresses:    []string{"http://192.168.1.10:8080"},
@@ -652,7 +654,7 @@ func TestClusterNodes(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200, got %d", w.Code)
 		}
-		var nodes []model.Node
+		var nodes []cluster.Node
 		if err := json.Unmarshal(w.Body.Bytes(), &nodes); err != nil {
 			t.Fatalf("failed to decode JSON: %v", err)
 		}
@@ -667,7 +669,7 @@ func TestClusterNodes(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 for self node, got %d", w.Code)
 		}
-		var selfNode model.Node
+		var selfNode cluster.Node
 		if err := json.Unmarshal(w.Body.Bytes(), &selfNode); err != nil {
 			t.Fatal(err)
 		}
@@ -682,7 +684,7 @@ func TestClusterNodes(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("expected 200 for peer node, got %d", w.Code)
 		}
-		var peerNode model.Node
+		var peerNode cluster.Node
 		if err := json.Unmarshal(w.Body.Bytes(), &peerNode); err != nil {
 			t.Fatal(err)
 		}
@@ -709,7 +711,7 @@ func TestClusterHandshake(t *testing.T) {
 	handler, _ := setupClusterTestServer(t, "valid-token")
 
 	// 1. Successful handshake
-	hsReq := model.HandshakeRequest{
+	hsReq := cluster.HandshakeRequest{
 		NodeID:       "node-incoming",
 		Name:         "node-incoming",
 		Addresses:    []string{"http://10.0.0.5:8080"},
@@ -724,7 +726,7 @@ func TestClusterHandshake(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
 	}
-	var hsResp model.HandshakeResponse
+	var hsResp cluster.HandshakeResponse
 	if err := json.Unmarshal(w.Body.Bytes(), &hsResp); err != nil {
 		t.Fatalf("failed to unmarshal HandshakeResponse: %v", err)
 	}
@@ -769,7 +771,7 @@ func TestClusterHeartbeat(t *testing.T) {
 	handler, _ := setupClusterTestServer(t, "hb-token")
 
 	// 1. Successful heartbeat
-	hbMsg := model.HeartbeatMessage{
+	hbMsg := cluster.HeartbeatMessage{
 		NodeID:       "node-peer-hb",
 		Addresses:    []string{"http://10.0.0.6:8080"},
 		ClusterToken: "hb-token",
@@ -813,7 +815,7 @@ func TestClusterLeave(t *testing.T) {
 	handler, cm := setupClusterTestServer(t, "")
 
 	// Handshake to add a peer
-	_, _ = cm.HandleHandshake(model.HandshakeRequest{
+	_, _ = cm.HandleHandshake(cluster.HandshakeRequest{
 		NodeID:    "node-to-leave",
 		Name:      "leaving-node",
 		Addresses: []string{"http://10.0.0.9:8080"},
@@ -841,7 +843,7 @@ func TestClusterLeave(t *testing.T) {
 	if !ok {
 		t.Fatal("expected peer to still exist after leave")
 	}
-	if peer.Status != model.NodeStatusOffline {
+	if peer.Status != cluster.StatusOffline {
 		t.Fatalf("expected peer status to be offline after leave, got %s", peer.Status)
 	}
 

@@ -1,28 +1,33 @@
-package stacks
+package stack
 
 import (
+	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"testing"
 
-	"github.com/chickenzord/dokidoki/internal/model"
+	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/system"
+	errdefs "github.com/docker/docker/errdefs"
 )
 
 func TestCalculateRollup(t *testing.T) {
 	tests := []struct {
 		name       string
-		containers []model.ContainerSummary
-		expected   model.ContainerRollup
+		containers []docker.Container
+		expected   Rollup
 	}{
 		{
 			name:       "empty containers",
-			containers: []model.ContainerSummary{},
-			expected:   model.ContainerRollup{},
+			containers: []docker.Container{},
+			expected:   Rollup{},
 		},
 		{
 			name: "various states with case insensitivity",
-			containers: []model.ContainerSummary{
+			containers: []docker.Container{
 				{State: "running"},
 				{State: "RUNNING"},
 				{State: "exited"},
@@ -32,7 +37,7 @@ func TestCalculateRollup(t *testing.T) {
 				{State: "dead"},
 				{State: "created"}, // Not one of the 5 specific states, but increments Total
 			},
-			expected: model.ContainerRollup{
+			expected: Rollup{
 				Running:    2,
 				Exited:     2,
 				Restarting: 1,
@@ -67,7 +72,7 @@ func TestCategorize_ManagedStacks(t *testing.T) {
 		},
 	}
 
-	containers := []model.ContainerSummary{
+	containers := []docker.Container{
 		{
 			ID:      "c1",
 			Name:    "app-one-web-1",
@@ -92,7 +97,7 @@ func TestCategorize_ManagedStacks(t *testing.T) {
 
 	// Stacks are sorted alphabetically: app-one, app-two
 	s1 := result.Stacks[0]
-	if s1.Name != "app-one" || s1.Source != model.StackSourceManaged || !s1.ComposePresent {
+	if s1.Name != "app-one" || s1.Source != string(SourceManaged) || !s1.ComposePresent {
 		t.Errorf("unexpected s1 summary: %+v", s1)
 	}
 	if s1.Rollup.Running != 2 || s1.Rollup.Total != 2 {
@@ -104,10 +109,10 @@ func TestCategorize_ManagedStacks(t *testing.T) {
 
 	// app-two has 0 containers, rollup should be all 0s
 	s2 := result.Stacks[1]
-	if s2.Name != "app-two" || s2.Source != model.StackSourceManaged || !s2.ComposePresent {
+	if s2.Name != "app-two" || s2.Source != string(SourceManaged) || !s2.ComposePresent {
 		t.Errorf("unexpected s2 summary: %+v", s2)
 	}
-	if s2.Rollup != (model.ContainerRollup{}) {
+	if s2.Rollup != (Rollup{}) {
 		t.Errorf("expected zero rollup for app-two, got %+v", s2.Rollup)
 	}
 	if len(s2.Services) != 0 {
@@ -129,7 +134,7 @@ func TestCategorize_ExternalStacks(t *testing.T) {
 	// No stacks discovered on filesystem
 	discovered := []DiscoveredStack{}
 
-	containers := []model.ContainerSummary{
+	containers := []docker.Container{
 		{
 			ID:      "ext1",
 			Name:    "external-nginx-1",
@@ -156,7 +161,7 @@ func TestCategorize_ExternalStacks(t *testing.T) {
 	if s.Name != "external-proxy" {
 		t.Errorf("expected stack name external-proxy, got %s", s.Name)
 	}
-	if s.Source != model.StackSourceExternal {
+	if s.Source != string(SourceExternal) {
 		t.Errorf("expected source external, got %s", s.Source)
 	}
 	if s.ComposePresent {
@@ -176,7 +181,7 @@ func TestCategorize_ExternalStacks(t *testing.T) {
 func TestCategorize_StandaloneContainers(t *testing.T) {
 	discovered := []DiscoveredStack{}
 
-	containers := []model.ContainerSummary{
+	containers := []docker.Container{
 		{
 			ID:    "stand1",
 			Name:  "my-redis",
@@ -227,8 +232,8 @@ func TestCategorize_MixedScenario(t *testing.T) {
 			Names: []string{"/managed-active_worker_1"},
 			State: "running",
 			Labels: map[string]string{
-				model.ComposeProjectLabel: "managed-active",
-				model.ComposeServiceLabel: "worker",
+				docker.ComposeProjectLabel: "managed-active",
+				docker.ComposeServiceLabel: "worker",
 			},
 		},
 		{
@@ -236,8 +241,8 @@ func TestCategorize_MixedScenario(t *testing.T) {
 			Names: []string{"/coolify_proxy_1"},
 			State: "running",
 			Labels: map[string]string{
-				model.ComposeProjectLabel: "coolify-proxy",
-				model.ComposeServiceLabel: "proxy",
+				docker.ComposeProjectLabel: "coolify-proxy",
+				docker.ComposeServiceLabel: "proxy",
 			},
 		},
 		{
@@ -256,13 +261,13 @@ func TestCategorize_MixedScenario(t *testing.T) {
 	}
 
 	// Alphabetical order
-	if result.Stacks[0].Name != "coolify-proxy" || result.Stacks[0].Source != model.StackSourceExternal {
+	if result.Stacks[0].Name != "coolify-proxy" || result.Stacks[0].Source != string(SourceExternal) {
 		t.Errorf("expected Stacks[0] to be coolify-proxy (external), got %+v", result.Stacks[0])
 	}
-	if result.Stacks[1].Name != "managed-active" || result.Stacks[1].Source != model.StackSourceManaged {
+	if result.Stacks[1].Name != "managed-active" || result.Stacks[1].Source != string(SourceManaged) {
 		t.Errorf("expected Stacks[1] to be managed-active (managed), got %+v", result.Stacks[1])
 	}
-	if result.Stacks[2].Name != "managed-idle" || result.Stacks[2].Source != model.StackSourceManaged {
+	if result.Stacks[2].Name != "managed-idle" || result.Stacks[2].Source != string(SourceManaged) {
 		t.Errorf("expected Stacks[2] to be managed-idle (managed), got %+v", result.Stacks[2])
 	}
 
@@ -442,9 +447,9 @@ func TestConvertContainer(t *testing.T) {
 			},
 		},
 		Labels: map[string]string{
-			model.ComposeProjectLabel: "my-stack",
-			model.ComposeServiceLabel: "redis",
-			"custom.label":            "value",
+			docker.ComposeProjectLabel: "my-stack",
+			docker.ComposeServiceLabel: "redis",
+			"custom.label":             "value",
 		},
 	}
 
@@ -560,8 +565,8 @@ func TestCategorizeContainers(t *testing.T) {
 			Names: []string{"/dokidoki"},
 			State: "running",
 			Labels: map[string]string{
-				model.ComposeProjectLabel: "my-stack",
-				model.ComposeServiceLabel: "dokidoki",
+				docker.ComposeProjectLabel: "my-stack",
+				docker.ComposeServiceLabel: "dokidoki",
 			},
 		},
 		{
@@ -590,4 +595,424 @@ func TestCategorizeContainers(t *testing.T) {
 	if result.Standalone[0].IsSelf {
 		t.Errorf("expected other container IsSelf=false")
 	}
+}
+
+type mockDockerClient struct {
+	listContainersFn   func(ctx context.Context) ([]types.Container, error)
+	inspectContainerFn func(ctx context.Context, id string) (types.ContainerJSON, error)
+	pingFn             func(ctx context.Context) (types.Ping, error)
+	serverVersionFn    func(ctx context.Context) (types.Version, error)
+	infoFn             func(ctx context.Context) (system.Info, error)
+}
+
+func (m *mockDockerClient) Ping(ctx context.Context) (types.Ping, error) {
+	if m.pingFn != nil {
+		return m.pingFn(ctx)
+	}
+	return types.Ping{}, nil
+}
+
+func (m *mockDockerClient) ListContainers(ctx context.Context) ([]types.Container, error) {
+	if m.listContainersFn != nil {
+		return m.listContainersFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockDockerClient) InspectContainer(ctx context.Context, id string) (types.ContainerJSON, error) {
+	if m.inspectContainerFn != nil {
+		return m.inspectContainerFn(ctx, id)
+	}
+	return types.ContainerJSON{}, nil
+}
+
+func (m *mockDockerClient) ServerVersion(ctx context.Context) (types.Version, error) {
+	if m.serverVersionFn != nil {
+		return m.serverVersionFn(ctx)
+	}
+	return types.Version{}, nil
+}
+
+func (m *mockDockerClient) Info(ctx context.Context) (system.Info, error) {
+	if m.infoFn != nil {
+		return m.infoFn(ctx)
+	}
+	return system.Info{}, nil
+}
+
+func (m *mockDockerClient) Close() error {
+	return nil
+}
+
+func setupTestService(t *testing.T, m *mockDockerClient, selfID string) (*Service, string) {
+	tempDir := t.TempDir()
+
+	// Create managed stack directory with compose.yaml
+	managedDir := filepath.Join(tempDir, "my-app")
+	if err := os.MkdirAll(managedDir, 0755); err != nil {
+		t.Fatalf("failed to create stack dir: %v", err)
+	}
+	composeContent := "services:\n  web:\n    image: nginx:latest\n"
+	if err := os.WriteFile(filepath.Join(managedDir, "compose.yaml"), []byte(composeContent), 0644); err != nil {
+		t.Fatalf("failed to write compose.yaml: %v", err)
+	}
+
+	scanner := NewScanner(tempDir)
+	svc := NewService(scanner, m, selfID)
+	return svc, tempDir
+}
+
+func TestService_ListStacks(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("EmptyStacks", func(t *testing.T) {
+		tempDir := t.TempDir()
+		svc := NewService(NewScanner(tempDir), &mockDockerClient{}, "")
+		stacks, err := svc.ListStacks(ctx, "all")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if stacks == nil {
+			t.Fatal("expected non-nil slice")
+		}
+		if len(stacks) != 0 {
+			t.Fatalf("expected 0 stacks, got %d", len(stacks))
+		}
+	})
+
+	t.Run("ManagedAndExternalFilters", func(t *testing.T) {
+		m := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    "c1",
+						Names: []string{"/my-app-web-1"},
+						State: "running",
+						Labels: map[string]string{
+							docker.ComposeProjectLabel: "my-app",
+							docker.ComposeServiceLabel: "web",
+						},
+					},
+					{
+						ID:    "c2",
+						Names: []string{"/ext-app-api-1"},
+						State: "running",
+						Labels: map[string]string{
+							docker.ComposeProjectLabel: "ext-app",
+							docker.ComposeServiceLabel: "api",
+						},
+					},
+				}, nil
+			},
+		}
+
+		svc, _ := setupTestService(t, m, "")
+
+		// Source: all
+		all, err := svc.ListStacks(ctx, "all")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(all) != 2 {
+			t.Fatalf("expected 2 stacks, got %d", len(all))
+		}
+
+		// Source: managed
+		managed, err := svc.ListStacks(ctx, "managed")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(managed) != 1 || managed[0].Name != "my-app" {
+			t.Fatalf("expected 1 managed stack 'my-app', got %+v", managed)
+		}
+
+		// Source: external
+		ext, err := svc.ListStacks(ctx, "external")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(ext) != 1 || ext[0].Name != "ext-app" {
+			t.Fatalf("expected 1 external stack 'ext-app', got %+v", ext)
+		}
+
+		// Invalid source
+		_, err = svc.ListStacks(ctx, "unknown-source")
+		if !errors.Is(err, ErrInvalidSource) {
+			t.Fatalf("expected ErrInvalidSource, got %v", err)
+		}
+	})
+}
+
+func TestService_GetStack(t *testing.T) {
+	ctx := context.Background()
+	m := &mockDockerClient{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return []types.Container{
+				{
+					ID:    "c1",
+					Names: []string{"/my-app-web-1"},
+					State: "running",
+					Labels: map[string]string{
+						docker.ComposeProjectLabel: "my-app",
+						docker.ComposeServiceLabel: "web",
+					},
+				},
+			}, nil
+		},
+	}
+
+	svc, _ := setupTestService(t, m, "")
+
+	t.Run("Found", func(t *testing.T) {
+		detail, err := svc.GetStack(ctx, "my-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if detail.Name != "my-app" {
+			t.Errorf("expected name 'my-app', got %s", detail.Name)
+		}
+		if len(detail.Containers) != 1 {
+			t.Errorf("expected 1 container, got %d", len(detail.Containers))
+		}
+		if len(detail.Services) != 1 || detail.Services[0] != "web" {
+			t.Errorf("expected services ['web'], got %+v", detail.Services)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		_, err := svc.GetStack(ctx, "non-existent")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+}
+
+func TestService_GetStackCompose(t *testing.T) {
+	ctx := context.Background()
+	svc, _ := setupTestService(t, &mockDockerClient{}, "")
+
+	t.Run("Found", func(t *testing.T) {
+		resp, err := svc.GetStackCompose(ctx, "my-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Name != "my-app" {
+			t.Errorf("expected name 'my-app', got %s", resp.Name)
+		}
+		if resp.Content == "" {
+			t.Errorf("expected non-empty compose content")
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		_, err := svc.GetStackCompose(ctx, "non-existent")
+		if !errors.Is(err, ErrComposeNotFound) {
+			t.Fatalf("expected ErrComposeNotFound, got %v", err)
+		}
+	})
+}
+
+func TestService_GetStackContainers(t *testing.T) {
+	ctx := context.Background()
+	m := &mockDockerClient{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return []types.Container{
+				{
+					ID:    "c1",
+					Names: []string{"/my-app-web-1"},
+					State: "running",
+					Labels: map[string]string{
+						docker.ComposeProjectLabel: "my-app",
+						docker.ComposeServiceLabel: "web",
+					},
+				},
+			}, nil
+		},
+	}
+
+	svc, _ := setupTestService(t, m, "")
+
+	t.Run("Found", func(t *testing.T) {
+		containers, err := svc.GetStackContainers(ctx, "my-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(containers) != 1 {
+			t.Fatalf("expected 1 container, got %d", len(containers))
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		_, err := svc.GetStackContainers(ctx, "non-existent")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+}
+
+func TestService_ListContainers(t *testing.T) {
+	ctx := context.Background()
+	m := &mockDockerClient{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return []types.Container{
+				{
+					ID:    "c1",
+					Names: []string{"/my-app-web-1"},
+					State: "running",
+					Labels: map[string]string{
+						docker.ComposeProjectLabel: "my-app",
+						docker.ComposeServiceLabel: "web",
+					},
+				},
+				{
+					ID:    "standalone-c2",
+					Names: []string{"/standalone-app"},
+					State: "running",
+				},
+			}, nil
+		},
+	}
+
+	svc, _ := setupTestService(t, m, "")
+
+	t.Run("Flat", func(t *testing.T) {
+		res, err := svc.ListContainers(ctx, "", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		containers, ok := res.([]docker.Container)
+		if !ok {
+			t.Fatalf("expected []docker.Container, got %T", res)
+		}
+		if len(containers) != 2 {
+			t.Fatalf("expected 2 containers, got %d", len(containers))
+		}
+	})
+
+	t.Run("Grouped", func(t *testing.T) {
+		res, err := svc.ListContainers(ctx, "", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		grouped, ok := res.(Grouped)
+		if !ok {
+			t.Fatalf("expected Grouped, got %T", res)
+		}
+		if len(grouped.Stacks["my-app"]) != 1 {
+			t.Errorf("expected 1 container in my-app stack group")
+		}
+		if len(grouped.Standalone) != 1 {
+			t.Errorf("expected 1 standalone container")
+		}
+	})
+
+	t.Run("FilterByStack", func(t *testing.T) {
+		res, err := svc.ListContainers(ctx, "my-app", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		containers, ok := res.([]docker.Container)
+		if !ok {
+			t.Fatalf("expected []docker.Container, got %T", res)
+		}
+		if len(containers) != 1 || containers[0].ID != "c1" {
+			t.Fatalf("expected container c1, got %+v", containers)
+		}
+
+		// Unknown stack returns empty slice
+		res, err = svc.ListContainers(ctx, "unknown-stack", false)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		containers, ok = res.([]docker.Container)
+		if !ok {
+			t.Fatalf("expected []docker.Container, got %T", res)
+		}
+		if containers == nil || len(containers) != 0 {
+			t.Fatalf("expected empty non-nil slice, got %+v", containers)
+		}
+	})
+}
+
+func TestService_InspectContainer(t *testing.T) {
+	ctx := context.Background()
+	selfID := "self-cid-123456"
+
+	m := &mockDockerClient{
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			switch id {
+			case "c1":
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   "c1",
+						Name: "/my-app-web-1",
+					},
+					Config: &container.Config{
+						Labels: map[string]string{
+							docker.ComposeProjectLabel: "my-app",
+							docker.ComposeServiceLabel: "web",
+						},
+					},
+				}, nil
+			case "c-self":
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   selfID,
+						Name: "/dokidoki-agent",
+					},
+				}, nil
+			case "c-standalone":
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   "c-standalone",
+						Name: "/solo",
+					},
+				}, nil
+			default:
+				return types.ContainerJSON{}, errdefs.NotFound(errors.New("container not found"))
+			}
+		},
+	}
+
+	svc, _ := setupTestService(t, m, selfID)
+
+	t.Run("ManagedContainer", func(t *testing.T) {
+		enriched, err := svc.InspectContainer(ctx, "c1")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if enriched.StackName != "my-app" || enriched.ServiceName != "web" || enriched.Source != "managed" {
+			t.Fatalf("unexpected enriched data: %+v", enriched)
+		}
+		if enriched.IsSelf {
+			t.Errorf("expected is_self=false")
+		}
+	})
+
+	t.Run("SelfContainer", func(t *testing.T) {
+		enriched, err := svc.InspectContainer(ctx, "c-self")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !enriched.IsSelf {
+			t.Errorf("expected is_self=true")
+		}
+	})
+
+	t.Run("StandaloneContainer", func(t *testing.T) {
+		enriched, err := svc.InspectContainer(ctx, "c-standalone")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if enriched.Source != "standalone" {
+			t.Errorf("expected source 'standalone', got %s", enriched.Source)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		_, err := svc.InspectContainer(ctx, "nonexistent")
+		if !errors.Is(err, ErrContainerNotFound) {
+			t.Fatalf("expected ErrContainerNotFound, got %v", err)
+		}
+	})
 }

@@ -3,16 +3,17 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
-	"github.com/chickenzord/dokidoki/internal/model"
 	"github.com/google/uuid"
 )
 
@@ -162,7 +163,7 @@ func TestDetectCandidateAddresses(t *testing.T) {
 }
 
 func TestManagerPeerRegistration(t *testing.T) {
-	selfNode := model.Node{
+	selfNode := Node{
 		ID:        "self-node-1",
 		Name:      "Node A",
 		Addresses: []string{"http://10.0.0.1:8080"},
@@ -173,7 +174,7 @@ func TestManagerPeerRegistration(t *testing.T) {
 
 	// Verify Self
 	self := mgr.Self()
-	if self.ID != "self-node-1" || !self.IsSelf || self.Status != model.NodeStatusAlive {
+	if self.ID != "self-node-1" || !self.IsSelf || self.Status != StatusAlive {
 		t.Errorf("invalid self node: %+v", self)
 	}
 
@@ -184,7 +185,7 @@ func TestManagerPeerRegistration(t *testing.T) {
 	}
 
 	// Register peer via Handshake
-	hsReq := model.HandshakeRequest{
+	hsReq := HandshakeRequest{
 		NodeID:       "peer-node-2",
 		Name:         "Node B",
 		Addresses:    []string{"http://10.0.0.2:8080"},
@@ -205,7 +206,7 @@ func TestManagerPeerRegistration(t *testing.T) {
 	if !ok {
 		t.Fatal("peer-node-2 not found after handshake")
 	}
-	if peer.Name != "Node B" || peer.Status != model.NodeStatusAlive || peer.IsSelf {
+	if peer.Name != "Node B" || peer.Status != StatusAlive || peer.IsSelf {
 		t.Errorf("unexpected peer attributes: %+v", peer)
 	}
 
@@ -224,7 +225,7 @@ func TestManagerPeerRegistration(t *testing.T) {
 	if !ok {
 		t.Errorf("peer-node-2 should still exist after HandleLeave")
 	}
-	if peerNode.Status != model.NodeStatusOffline {
+	if peerNode.Status != StatusOffline {
 		t.Errorf("expected offline status after HandleLeave, got %v", peerNode.Status)
 	}
 
@@ -238,7 +239,7 @@ func TestManagerPeerRegistration(t *testing.T) {
 }
 
 func TestManagerTTLEviction(t *testing.T) {
-	selfNode := model.Node{
+	selfNode := Node{
 		ID:   "self-1",
 		Name: "Self",
 	}
@@ -247,7 +248,7 @@ func TestManagerTTLEviction(t *testing.T) {
 
 	// Add peer
 	peerID := "peer-expiring"
-	_, err := mgr.HandleHandshake(model.HandshakeRequest{
+	_, err := mgr.HandleHandshake(HandshakeRequest{
 		NodeID: peerID,
 		Name:   "Peer Expiring",
 	})
@@ -265,7 +266,7 @@ func TestManagerTTLEviction(t *testing.T) {
 	if !ok {
 		t.Fatal("node should still exist in suspect state")
 	}
-	if node.Status != model.NodeStatusSuspect {
+	if node.Status != StatusSuspect {
 		t.Errorf("expected suspect status, got %v", node.Status)
 	}
 
@@ -279,7 +280,7 @@ func TestManagerTTLEviction(t *testing.T) {
 	if !ok {
 		t.Fatalf("node should still exist in offline state")
 	}
-	if node.Status != model.NodeStatusOffline {
+	if node.Status != StatusOffline {
 		t.Errorf("expected offline status, got %v", node.Status)
 	}
 
@@ -299,14 +300,14 @@ func TestManagerTTLEviction(t *testing.T) {
 }
 
 func TestManagerTokenValidation(t *testing.T) {
-	selfNode := model.Node{ID: "self", Name: "Self"}
+	selfNode := Node{ID: "self", Name: "Self"}
 	validToken := "cluster-secret-key"
 
 	t.Run("TokenEnforced", func(t *testing.T) {
 		mgr := NewManager(selfNode, validToken, 30*time.Second, nil, "")
 
 		// 1. Handshake with valid token
-		_, err := mgr.HandleHandshake(model.HandshakeRequest{
+		_, err := mgr.HandleHandshake(HandshakeRequest{
 			NodeID:       "peer-1",
 			Name:         "Peer 1",
 			ClusterToken: validToken,
@@ -316,7 +317,7 @@ func TestManagerTokenValidation(t *testing.T) {
 		}
 
 		// 2. Handshake with wrong token
-		_, err = mgr.HandleHandshake(model.HandshakeRequest{
+		_, err = mgr.HandleHandshake(HandshakeRequest{
 			NodeID:       "peer-2",
 			Name:         "Peer 2",
 			ClusterToken: "wrong-token",
@@ -326,7 +327,7 @@ func TestManagerTokenValidation(t *testing.T) {
 		}
 
 		// 3. Handshake with empty token
-		_, err = mgr.HandleHandshake(model.HandshakeRequest{
+		_, err = mgr.HandleHandshake(HandshakeRequest{
 			NodeID:       "peer-3",
 			Name:         "Peer 3",
 			ClusterToken: "",
@@ -336,7 +337,7 @@ func TestManagerTokenValidation(t *testing.T) {
 		}
 
 		// 4. Heartbeat with valid token
-		err = mgr.HandleHeartbeat(model.HeartbeatMessage{
+		err = mgr.HandleHeartbeat(HeartbeatMessage{
 			NodeID:       "peer-1",
 			ClusterToken: validToken,
 		})
@@ -345,7 +346,7 @@ func TestManagerTokenValidation(t *testing.T) {
 		}
 
 		// 5. Heartbeat with invalid token
-		err = mgr.HandleHeartbeat(model.HeartbeatMessage{
+		err = mgr.HandleHeartbeat(HeartbeatMessage{
 			NodeID:       "peer-1",
 			ClusterToken: "invalid-token",
 		})
@@ -358,7 +359,7 @@ func TestManagerTokenValidation(t *testing.T) {
 		mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
 
 		// Handshake with empty token succeeds
-		_, err := mgr.HandleHandshake(model.HandshakeRequest{
+		_, err := mgr.HandleHandshake(HandshakeRequest{
 			NodeID: "peer-open",
 			Name:   "Peer Open",
 		})
@@ -367,7 +368,7 @@ func TestManagerTokenValidation(t *testing.T) {
 		}
 
 		// Heartbeat with empty token succeeds
-		err = mgr.HandleHeartbeat(model.HeartbeatMessage{
+		err = mgr.HandleHeartbeat(HeartbeatMessage{
 			NodeID: "peer-open",
 		})
 		if err != nil {
@@ -377,14 +378,14 @@ func TestManagerTokenValidation(t *testing.T) {
 }
 
 func TestPEXMerge(t *testing.T) {
-	selfNode := model.Node{ID: "self", Name: "Self"}
+	selfNode := Node{ID: "self", Name: "Self"}
 	mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
 
 	// Heartbeat introduces sender node and peer-3 via KnownPeers
-	err := mgr.HandleHeartbeat(model.HeartbeatMessage{
+	err := mgr.HandleHeartbeat(HeartbeatMessage{
 		NodeID:    "peer-2",
 		Addresses: []string{"http://10.0.0.2:8080"},
-		KnownPeers: []model.Node{
+		KnownPeers: []Node{
 			{
 				ID:        "peer-3",
 				Name:      "Node 3",
@@ -417,18 +418,18 @@ func TestStaticProvider(t *testing.T) {
 			return
 		}
 
-		var req model.HandshakeRequest
+		var req HandshakeRequest
 		if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 
-		resp := model.HandshakeResponse{
+		resp := HandshakeResponse{
 			NodeID:    "mock-remote-node",
 			Name:      "Remote Node",
 			Addresses: []string{"http://127.0.0.1:9999"},
 			Version:   "0.1.0",
-			Peers: []model.Node{
+			Peers: []Node{
 				{
 					ID:        "gossip-peer",
 					Name:      "Gossip Peer",
@@ -442,7 +443,7 @@ func TestStaticProvider(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	selfNode := model.Node{
+	selfNode := Node{
 		ID:        "self-node",
 		Name:      "Local Node",
 		Addresses: []string{"http://127.0.0.1:8080"},
@@ -484,7 +485,7 @@ func TestPEXProvider(t *testing.T) {
 	heartbeatReceived := make(chan string, 1)
 	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/cluster/heartbeat" {
-			var msg model.HeartbeatMessage
+			var msg HeartbeatMessage
 			_ = json.NewDecoder(r.Body).Decode(&msg)
 			heartbeatReceived <- msg.NodeID
 			w.WriteHeader(http.StatusOK)
@@ -494,14 +495,14 @@ func TestPEXProvider(t *testing.T) {
 	}))
 	defer mockServer.Close()
 
-	selfNode := model.Node{
+	selfNode := Node{
 		ID:        "self-node",
 		Name:      "Local Node",
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
 
-	peersFunc := func() []model.Node {
-		return []model.Node{
+	peersFunc := func() []Node {
+		return []Node{
 			selfNode,
 			{
 				ID:        "target-peer",
@@ -542,7 +543,7 @@ func TestPEXProvider(t *testing.T) {
 }
 
 func TestManagerLifecycleAndEventConsumption(t *testing.T) {
-	selfNode := model.Node{
+	selfNode := Node{
 		ID:        "self-lifecycle",
 		Name:      "Self Lifecycle",
 		Addresses: []string{"http://127.0.0.1:8080"},
@@ -554,7 +555,7 @@ func TestManagerLifecycleAndEventConsumption(t *testing.T) {
 	defer cancel()
 
 	mgr.Start(ctx)
-	defer mgr.Stop()
+	defer mgr.Stop(context.Background())
 
 	// Simulate discovery event
 	mgr.handlePeerEvent(PeerEvent{
@@ -579,7 +580,7 @@ func TestManagerLifecycleAndEventConsumption(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected peer-event-1 to still exist in offline status after EventLost")
 	}
-	if node.Status != model.NodeStatusOffline {
+	if node.Status != StatusOffline {
 		t.Errorf("expected offline status after EventLost, got %v", node.Status)
 	}
 
@@ -595,7 +596,7 @@ func TestManagerLifecycleAndEventConsumption(t *testing.T) {
 func TestManagerPeerPersistence(t *testing.T) {
 	tempDir := t.TempDir()
 
-	selfNode := model.Node{
+	selfNode := Node{
 		ID:        "self-persistence",
 		Name:      "Self Persistence",
 		Addresses: []string{"http://127.0.0.1:8080"},
@@ -604,7 +605,7 @@ func TestManagerPeerPersistence(t *testing.T) {
 	mgr1 := NewManager(selfNode, "", 30*time.Second, nil, tempDir)
 
 	// Add peer via handshake
-	_, err := mgr1.HandleHandshake(model.HandshakeRequest{
+	_, err := mgr1.HandleHandshake(HandshakeRequest{
 		NodeID:    "peer-discovered-1",
 		Name:      "Discovered 1",
 		Addresses: []string{"http://192.168.1.100:8080"},
@@ -624,7 +625,7 @@ func TestManagerPeerPersistence(t *testing.T) {
 	}
 
 	// Stop mgr1 (simulating shutdown)
-	if err := mgr1.Stop(); err != nil {
+	if err := mgr1.Stop(context.Background()); err != nil {
 		t.Fatalf("stop error: %v", err)
 	}
 
@@ -652,5 +653,256 @@ func TestManagerPeerPersistence(t *testing.T) {
 	}
 	if len(persistedAfterRemove) != 0 {
 		t.Fatalf("expected 0 persisted nodes after remove, got: %d", len(persistedAfterRemove))
+	}
+}
+
+func TestManagerNodeDefensiveCopy(t *testing.T) {
+	selfNode := Node{
+		ID:        "self-copy",
+		Name:      "Self Copy",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+	mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
+	_, err := mgr.HandleHandshake(HandshakeRequest{
+		NodeID:    "peer-copy-1",
+		Name:      "Peer Copy 1",
+		Addresses: []string{"http://192.168.1.50:8080"},
+	})
+	if err != nil {
+		t.Fatalf("handshake failed: %v", err)
+	}
+
+	// 1. GetNode on peer
+	p1, ok := mgr.GetNode("peer-copy-1")
+	if !ok {
+		t.Fatal("peer-copy-1 not found")
+	}
+	p1.Addresses[0] = "http://corrupted:9999"
+
+	p2, _ := mgr.GetNode("peer-copy-1")
+	if p2.Addresses[0] == "http://corrupted:9999" {
+		t.Errorf("GetNode did not deep copy Addresses; mutated internal peer slice")
+	}
+
+	// 2. GetNode on self
+	s1, ok := mgr.GetNode(selfNode.ID)
+	if !ok {
+		t.Fatal("self node not found")
+	}
+	s1.Addresses[0] = "http://corrupted-self:9999"
+
+	s2, _ := mgr.GetNode(selfNode.ID)
+	if s2.Addresses[0] == "http://corrupted-self:9999" {
+		t.Errorf("GetNode did not deep copy self Addresses; mutated internal self slice")
+	}
+
+	// 3. Self()
+	s3 := mgr.Self()
+	s3.Addresses[0] = "http://corrupted-self2:9999"
+	s4 := mgr.Self()
+	if s4.Addresses[0] == "http://corrupted-self2:9999" {
+		t.Errorf("Self() did not deep copy Addresses")
+	}
+
+	// 4. ListNodes
+	nodes := mgr.ListNodes()
+	for i := range nodes {
+		nodes[i].Addresses[0] = "http://corrupted-list:9999"
+	}
+	nodesAfter := mgr.ListNodes()
+	for _, n := range nodesAfter {
+		if strings.Contains(n.Addresses[0], "corrupted") {
+			t.Errorf("ListNodes did not deep copy Addresses: %+v", n)
+		}
+	}
+}
+
+func TestPEXProviderGoroutineTrackingAndStop(t *testing.T) {
+	hangChan := make(chan struct{})
+	mockServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-hangChan:
+			w.WriteHeader(http.StatusOK)
+		case <-r.Context().Done():
+		}
+	}))
+	defer mockServer.Close()
+	defer close(hangChan)
+
+	selfNode := Node{
+		ID:        "self-pex",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+	peersFunc := func() []Node {
+		return []Node{
+			selfNode,
+			{
+				ID:        "slow-peer",
+				Addresses: []string{mockServer.URL},
+			},
+		}
+	}
+
+	events := make(chan PeerEvent, 10)
+	provider := NewPEXProvider(selfNode, "", peersFunc, 10*time.Millisecond, mockServer.Client())
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	if err := provider.Start(ctx, events); err != nil {
+		t.Fatalf("Start failed: %v", err)
+	}
+
+	// Wait briefly for heartbeat probe to start
+	time.Sleep(30 * time.Millisecond)
+
+	// Stop provider; workerWg.Wait() must return cleanly when ctx cancels
+	stopped := make(chan struct{})
+	go func() {
+		_ = provider.Stop()
+		close(stopped)
+	}()
+
+	select {
+	case <-stopped:
+		// Succeeded cleanly without hanging
+	case <-time.After(2 * time.Second):
+		t.Fatal("PEXProvider.Stop() hung or did not cancel workers")
+	}
+}
+
+func TestManagerStopContextTimeout(t *testing.T) {
+	done := make(chan struct{})
+	hangServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case <-r.Context().Done():
+		case <-done:
+		}
+	}))
+	defer hangServer.Close()
+	defer close(done)
+	defer hangServer.CloseClientConnections()
+
+	selfNode := Node{
+		ID:        "self-timeout",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+	mgr := NewManager(selfNode, "", 30*time.Second, hangServer.Client(), "")
+
+	_, err := mgr.HandleHandshake(HandshakeRequest{
+		NodeID:    "hanging-peer",
+		Addresses: []string{hangServer.URL},
+	})
+	if err != nil {
+		t.Fatalf("handshake failed: %v", err)
+	}
+
+	// Stop with a short 100ms timeout context
+	ctx, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+	defer cancel()
+
+	start := time.Now()
+	if err := mgr.Stop(ctx); err != nil {
+		t.Fatalf("Stop returned error: %v", err)
+	}
+	duration := time.Since(start)
+
+	if duration > 1*time.Second {
+		t.Errorf("mgr.Stop took %v, expected it to respect context timeout (~100ms)", duration)
+	}
+}
+
+func TestManagerStopConcurrentLeaveNotifications(t *testing.T) {
+	var activeHandlers int
+	var maxConcurrent int
+	var mu sync.Mutex
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/cluster/leave" {
+			mu.Lock()
+			activeHandlers++
+			if activeHandlers > maxConcurrent {
+				maxConcurrent = activeHandlers
+			}
+			mu.Unlock()
+
+			time.Sleep(50 * time.Millisecond)
+
+			mu.Lock()
+			activeHandlers--
+			mu.Unlock()
+
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	selfNode := Node{
+		ID:        "self-concurrent",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+	mgr := NewManager(selfNode, "", 30*time.Second, server.Client(), "")
+
+	// Register 4 peers pointing to the test server
+	for i := 1; i <= 4; i++ {
+		_, err := mgr.HandleHandshake(HandshakeRequest{
+			NodeID:    fmt.Sprintf("peer-%d", i),
+			Addresses: []string{server.URL},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	start := time.Now()
+	if err := mgr.Stop(context.Background()); err != nil {
+		t.Fatalf("Stop error: %v", err)
+	}
+	duration := time.Since(start)
+
+	mu.Lock()
+	highest := maxConcurrent
+	mu.Unlock()
+
+	if highest < 2 {
+		t.Errorf("expected concurrent leave dispatches, max concurrent was %d (duration: %v)", highest, duration)
+	}
+}
+
+func TestManagerConcurrentPersistence(t *testing.T) {
+	tempDir := t.TempDir()
+	selfNode := Node{
+		ID:        "self-concurrent-persist",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+	mgr := NewManager(selfNode, "", 10*time.Second, nil, tempDir)
+
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		nodeID := fmt.Sprintf("node-%d", i)
+		go func(id string) {
+			defer wg.Done()
+			_, _ = mgr.HandleHandshake(HandshakeRequest{
+				NodeID:    id,
+				Name:      "Node " + id,
+				Addresses: []string{"http://10.0.0.1:8080"},
+			})
+			_ = mgr.HandleHeartbeat(HeartbeatMessage{
+				NodeID:    id,
+				Addresses: []string{"http://10.0.0.1:8081"},
+			})
+		}(nodeID)
+	}
+	wg.Wait()
+
+	persisted, err := LoadPersistedNodes(tempDir)
+	if err != nil {
+		t.Fatalf("failed to load persisted nodes after concurrent writes: %v", err)
+	}
+	if len(persisted) != 20 {
+		t.Fatalf("expected 20 persisted nodes, got %d", len(persisted))
 	}
 }

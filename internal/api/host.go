@@ -6,8 +6,18 @@ import (
 	"runtime"
 	"strings"
 
-	"github.com/chickenzord/dokidoki/internal/model"
+	"github.com/chickenzord/dokidoki/internal/docker"
 )
+
+// HostInfo represents host system and Docker daemon information.
+type HostInfo struct {
+	Hostname        string          `json:"hostname"`
+	OS              string          `json:"os"`
+	Arch            string          `json:"arch"`
+	DokidokiVersion string          `json:"dokidokiVersion"`
+	StacksDir       string          `json:"stacksDir"`
+	Docker          docker.HostInfo `json:"docker"`
+}
 
 // handleHostInfo handles GET /api/v1/host.
 // Returns host system and Docker engine information.
@@ -20,13 +30,13 @@ func (s *Server) handleHostInfo(w http.ResponseWriter, r *http.Request) {
 	} else {
 		hostname, _ = os.Hostname()
 	}
-	hostInfo := model.HostInfo{
+	hostInfo := HostInfo{
 		Hostname:        hostname,
 		OS:              runtime.GOOS,
 		Arch:            runtime.GOARCH,
 		DokidokiVersion: "0.1.0",
 		StacksDir:       s.stacksDir,
-		Docker:          model.DockerHostInfo{},
+		Docker:          docker.HostInfo{},
 	}
 
 	ver, verErr := s.dockerCli.ServerVersion(ctx)

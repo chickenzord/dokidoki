@@ -1,12 +1,10 @@
-package stacks
+package stack
 
 import (
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
-
-	"github.com/chickenzord/dokidoki/internal/model"
 )
 
 // ComposeFileCandidates lists the compose filenames in order of preference.
@@ -15,13 +13,6 @@ var ComposeFileCandidates = []string{
 	"compose.yml",
 	"docker-compose.yaml",
 	"docker-compose.yml",
-}
-
-// DiscoveredStack represents a stack found on the filesystem.
-type DiscoveredStack struct {
-	Name           string
-	ComposePath    string
-	ComposePresent bool
 }
 
 // Scanner scans a directory for Docker Compose stacks.
@@ -35,21 +26,21 @@ func NewScanner(stacksDir string) *Scanner {
 }
 
 // Scan searches the configured stacks directory for stacks.
-func (s *Scanner) Scan() ([]DiscoveredStack, error) {
+func (s *Scanner) Scan() ([]Discovered, error) {
 	return ScanDir(s.stacksDir)
 }
 
 // ScanDir searches the given directory for subdirectories containing compose files.
-func ScanDir(stacksDir string) ([]DiscoveredStack, error) {
+func ScanDir(stacksDir string) ([]Discovered, error) {
 	entries, err := os.ReadDir(stacksDir)
 	if err != nil {
 		if os.IsNotExist(err) {
-			return []DiscoveredStack{}, nil
+			return []Discovered{}, nil
 		}
 		return nil, err
 	}
 
-	var discovered []DiscoveredStack
+	discovered := make([]Discovered, 0)
 	for _, entry := range entries {
 		if !entry.IsDir() {
 			continue
@@ -63,7 +54,7 @@ func ScanDir(stacksDir string) ([]DiscoveredStack, error) {
 		stackDir := filepath.Join(stacksDir, name)
 		composePath, found := FindComposeFile(stackDir)
 		if found {
-			discovered = append(discovered, DiscoveredStack{
+			discovered = append(discovered, Discovered{
 				Name:           name,
 				ComposePath:    composePath,
 				ComposePresent: true,
@@ -103,13 +94,13 @@ func ReadComposeFile(path string) (string, error) {
 	return string(data), nil
 }
 
-// GetComposeFileResponse reads and constructs a model.ComposeFileResponse.
-func GetComposeFileResponse(name, path string) (*model.ComposeFileResponse, error) {
+// GetComposeFileResponse reads and constructs a ComposeResponse.
+func GetComposeFileResponse(name, path string) (*ComposeResponse, error) {
 	content, err := ReadComposeFile(path)
 	if err != nil {
 		return nil, err
 	}
-	return &model.ComposeFileResponse{
+	return &ComposeResponse{
 		Name:    name,
 		Path:    path,
 		Content: content,

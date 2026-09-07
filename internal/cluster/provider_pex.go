@@ -8,28 +8,29 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/chickenzord/dokidoki/internal/model"
 )
 
 // PEXProvider periodically sends heartbeats to active peers to exchange topology tables.
 type PEXProvider struct {
-	self         model.Node
+	self         Node
 	clusterToken string
-	peersFunc    func() []model.Node
+	peersFunc    func() []Node
 	interval     time.Duration
 	client       *http.Client
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	mu       sync.Mutex
+	ctx      context.Context
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	workerWg sync.WaitGroup
+	sem      chan struct{}
 }
 
 // NewPEXProvider creates a new PEX (Peer Exchange) provider.
 func NewPEXProvider(
-	self model.Node,
+	self Node,
 	clusterToken string,
-	peersFunc func() []model.Node,
+	peersFunc func() []Node,
 	interval time.Duration,
 	client *http.Client,
 ) *PEXProvider {
@@ -48,6 +49,7 @@ func NewPEXProvider(
 		peersFunc:    peersFunc,
 		interval:     interval,
 		client:       client,
+		sem:          make(chan struct{}, 10),
 	}
 }
 
@@ -58,7 +60,16 @@ func (p *PEXProvider) Name() string {
 
 // Start initiates periodic heartbeat exchanges with known peers.
 func (p *PEXProvider) Start(ctx context.Context, events chan<- PeerEvent) error {
+	p.mu.Lock()
+	if p.cancel != nil {
+		p.cancel()
+	}
 	p.ctx, p.cancel = context.WithCancel(ctx)
+	if p.sem == nil {
+		p.sem = make(chan struct{}, 10)
+	}
+	pCtx := p.ctx
+	p.mu.Unlock()
 
 	p.wg.Add(1)
 	go func() {
@@ -69,7 +80,7 @@ func (p *PEXProvider) Start(ctx context.Context, events chan<- PeerEvent) error 
 
 		for {
 			select {
-			case <-p.ctx.Done():
+			case <-pCtx.Done():
 				return
 			case <-ticker.C:
 				p.sendHeartbeats(events)
@@ -82,10 +93,14 @@ func (p *PEXProvider) Start(ctx context.Context, events chan<- PeerEvent) error 
 
 // Stop halts heartbeat dissemination.
 func (p *PEXProvider) Stop() error {
+	p.mu.Lock()
 	if p.cancel != nil {
 		p.cancel()
 	}
+	p.mu.Unlock()
+
 	p.wg.Wait()
+	p.workerWg.Wait()
 	return nil
 }
 
@@ -94,10 +109,17 @@ func (p *PEXProvider) sendHeartbeats(events chan<- PeerEvent) {
 		return
 	}
 
+	p.mu.Lock()
+	if p.ctx == nil || p.ctx.Err() != nil {
+		p.mu.Unlock()
+		return
+	}
+	p.mu.Unlock()
+
 	knownPeers := p.peersFunc()
-	msg := model.HeartbeatMessage{
+	msg := HeartbeatMessage{
 		NodeID:       p.self.ID,
-		Addresses:    p.self.Addresses,
+		Addresses:    append([]string(nil), p.self.Addresses...),
 		ClusterToken: p.clusterToken,
 		KnownPeers:   knownPeers,
 	}
@@ -113,7 +135,17 @@ func (p *PEXProvider) sendHeartbeats(events chan<- PeerEvent) {
 		}
 
 		peerNode := peer
-		go func(targetPeer model.Node) {
+		p.workerWg.Add(1)
+		go func(targetPeer Node) {
+			defer p.workerWg.Done()
+
+			select {
+			case <-p.ctx.Done():
+				return
+			case p.sem <- struct{}{}:
+			}
+			defer func() { <-p.sem }()
+
 			for _, addr := range targetPeer.Addresses {
 				target := strings.TrimRight(addr, "/") + "/api/v1/cluster/heartbeat"
 				reqCtx, reqCancel := context.WithTimeout(p.ctx, 3*time.Second)
@@ -142,7 +174,7 @@ func (p *PEXProvider) sendHeartbeats(events chan<- PeerEvent) {
 						Type:      EventUpdated,
 						NodeID:    targetPeer.ID,
 						Name:      targetPeer.Name,
-						Addresses: targetPeer.Addresses,
+						Addresses: append([]string(nil), targetPeer.Addresses...),
 					}:
 					case <-p.ctx.Done():
 					}

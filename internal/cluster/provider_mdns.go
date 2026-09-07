@@ -11,7 +11,7 @@ import (
 	"time"
 
 	"github.com/chickenzord/dokidoki/internal/logger"
-	"github.com/chickenzord/dokidoki/internal/model"
+
 	"github.com/grandcat/zeroconf"
 )
 
@@ -22,7 +22,7 @@ const (
 
 // MDNSProvider advertises and browses Dokidoki instances over LAN via mDNS / DNS-SD.
 type MDNSProvider struct {
-	self         model.Node
+	self         Node
 	port         int
 	clusterToken string
 	client       *http.Client
@@ -35,7 +35,7 @@ type MDNSProvider struct {
 }
 
 // NewMDNSProvider creates a new MDNSProvider.
-func NewMDNSProvider(self model.Node, port int, clusterToken string, client *http.Client) *MDNSProvider {
+func NewMDNSProvider(self Node, port int, clusterToken string, client *http.Client) *MDNSProvider {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 5 * time.Second,
@@ -160,7 +160,7 @@ func (p *MDNSProvider) handleDiscoveredEntry(entry *zeroconf.ServiceEntry, event
 	// Attempt handshake
 	for _, addr := range candidates {
 		target := strings.TrimRight(addr, "/") + "/api/v1/cluster/handshake"
-		handshakeReq := model.HandshakeRequest{
+		handshakeReq := HandshakeRequest{
 			NodeID:       p.self.ID,
 			Name:         p.self.Name,
 			Addresses:    p.self.Addresses,
@@ -190,7 +190,7 @@ func (p *MDNSProvider) handleDiscoveredEntry(entry *zeroconf.ServiceEntry, event
 			continue
 		}
 
-		var hsResp model.HandshakeResponse
+		var hsResp HandshakeResponse
 		decodeErr := json.NewDecoder(resp.Body).Decode(&hsResp)
 		resp.Body.Close()
 		reqCancel()

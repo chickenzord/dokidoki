@@ -4,8 +4,6 @@ import (
 	"path/filepath"
 	"testing"
 	"time"
-
-	"github.com/chickenzord/dokidoki/internal/model"
 )
 
 func TestPersistDiscoveredNodes(t *testing.T) {
@@ -20,12 +18,12 @@ func TestPersistDiscoveredNodes(t *testing.T) {
 		t.Fatalf("expected 0 nodes, got: %d", len(initialNodes))
 	}
 
-	testNodes := []model.Node{
+	testNodes := []Node{
 		{
 			ID:        "node-2",
 			Name:      "alpha",
 			Addresses: []string{"http://192.168.1.20:8080"},
-			Status:    model.NodeStatusAlive,
+			Status:    StatusAlive,
 			Version:   "0.1.0",
 			LastSeen:  time.Now().UTC().Truncate(time.Second),
 		},
@@ -33,7 +31,7 @@ func TestPersistDiscoveredNodes(t *testing.T) {
 			ID:        "node-1",
 			Name:      "beta",
 			Addresses: []string{"http://192.168.1.10:8080"},
-			Status:    model.NodeStatusOffline,
+			Status:    StatusOffline,
 			Version:   "0.1.0",
 			LastSeen:  time.Now().UTC().Truncate(time.Second),
 		},
@@ -75,7 +73,7 @@ func TestPersistEmptyStacksDir(t *testing.T) {
 		t.Errorf("expected nil, nil for empty stacksDir, got %v, %v", nodes, err)
 	}
 
-	if err := SavePersistedNodes("", []model.Node{{ID: "n1"}}); err != nil {
+	if err := SavePersistedNodes("", []Node{{ID: "n1"}}); err != nil {
 		t.Errorf("expected nil error for empty stacksDir, got %v", err)
 	}
 }

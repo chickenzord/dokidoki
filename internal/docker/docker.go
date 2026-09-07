@@ -24,10 +24,10 @@ type ClientWrapper struct {
 	cli *client.Client
 }
 
-// NewClient creates a new Docker client wrapper.
+// New creates a new Docker client conforming to the Client interface.
 // It uses client.WithAPIVersionNegotiation() and client.FromEnv.
 // If dockerHost is explicitly specified, it overrides with client.WithHost(dockerHost).
-func NewClient(dockerHost string) (*ClientWrapper, error) {
+func New(dockerHost string) (Client, error) {
 	opts := []client.Opt{
 		client.FromEnv,
 		client.WithAPIVersionNegotiation(),
@@ -42,6 +42,15 @@ func NewClient(dockerHost string) (*ClientWrapper, error) {
 	}
 
 	return &ClientWrapper{cli: cli}, nil
+}
+
+// NewClient creates a new Docker client wrapper (backwards compatibility).
+func NewClient(dockerHost string) (*ClientWrapper, error) {
+	c, err := New(dockerHost)
+	if err != nil {
+		return nil, err
+	}
+	return c.(*ClientWrapper), nil
 }
 
 // Ping checks connectivity to the Docker daemon.

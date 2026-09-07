@@ -16,8 +16,7 @@ import (
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/logger"
-	"github.com/chickenzord/dokidoki/internal/model"
-	"github.com/chickenzord/dokidoki/internal/stacks"
+	"github.com/chickenzord/dokidoki/internal/stack"
 )
 
 var (
@@ -75,7 +74,7 @@ func main() {
 	logger.PrintConfig("Configuration:", configItems)
 
 	// Initialize Docker client
-	dockerCli, err := docker.NewClient(cfg.DockerHost)
+	dockerCli, err := docker.New(cfg.DockerHost)
 	if err != nil {
 		logger.Errorf("Failed to initialize Docker client: %v", err)
 		os.Exit(1)
@@ -95,11 +94,11 @@ func main() {
 	}
 
 	// Initialize Cluster Manager
-	self := model.Node{
+	self := cluster.Node{
 		ID:        nodeID,
 		Name:      cfg.NodeName,
 		Addresses: candidateAddrs,
-		Status:    model.NodeStatusAlive,
+		Status:    cluster.StatusAlive,
 		Version:   version,
 		IsSelf:    true,
 	}
@@ -120,8 +119,9 @@ func main() {
 	clusterManager.Start(clusterCtx)
 
 	// Initialize API Router and HTTP Server
-	scanner := stacks.NewScanner(cfg.StacksDir)
-	router := api.NewRouter(cfg, dockerCli, scanner, clusterManager, selfContainerID)
+	scanner := stack.NewScanner(cfg.StacksDir)
+	stackSvc := stack.NewService(scanner, dockerCli, selfContainerID)
+	router := api.NewRouter(cfg, dockerCli, stackSvc, clusterManager, selfContainerID)
 
 	server := &http.Server{
 		Addr:         cfg.Addr(),
@@ -150,12 +150,6 @@ func main() {
 		logger.Infof("Received signal %v, initiating graceful shutdown...", sig)
 	}
 
-	// Stop cluster manager (which sends leave messages to peers)
-	logger.Info("Stopping cluster manager...")
-	if err := clusterManager.Stop(); err != nil {
-		logger.Warnf("Cluster manager stop error: %v", err)
-	}
-
 	// Graceful HTTP server shutdown
 	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer shutdownCancel()
@@ -164,6 +158,12 @@ func main() {
 		logger.Errorf("HTTP server forced to shutdown: %v", err)
 	} else {
 		logger.Info("HTTP server shut down cleanly")
+	}
+
+	// Stop cluster manager (which sends leave messages to peers)
+	logger.Info("Stopping cluster manager...")
+	if err := clusterManager.Stop(shutdownCtx); err != nil {
+		logger.Warnf("Cluster manager stop error: %v", err)
 	}
 
 	logger.Info("Dokidoki exited")

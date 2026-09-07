@@ -8,8 +8,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/chickenzord/dokidoki/internal/model"
 )
 
 const (
@@ -23,7 +21,7 @@ func NodesFilePath(stacksDir string) string {
 
 // LoadPersistedNodes reads discovered nodes from $stacksDir/.dokidoki/nodes.json.
 // Returns an empty slice without error if the file does not exist.
-func LoadPersistedNodes(stacksDir string) ([]model.Node, error) {
+func LoadPersistedNodes(stacksDir string) ([]Node, error) {
 	if strings.TrimSpace(stacksDir) == "" {
 		return nil, nil
 	}
@@ -42,7 +40,7 @@ func LoadPersistedNodes(stacksDir string) ([]model.Node, error) {
 		return nil, nil
 	}
 
-	var nodes []model.Node
+	var nodes []Node
 	if err := json.Unmarshal([]byte(trimmed), &nodes); err != nil {
 		return nil, err
 	}
@@ -51,7 +49,7 @@ func LoadPersistedNodes(stacksDir string) ([]model.Node, error) {
 }
 
 // SavePersistedNodes saves discovered peers to $stacksDir/.dokidoki/nodes.json atomically.
-func SavePersistedNodes(stacksDir string, nodes []model.Node) error {
+func SavePersistedNodes(stacksDir string, nodes []Node) error {
 	if strings.TrimSpace(stacksDir) == "" {
 		return nil
 	}
@@ -64,7 +62,7 @@ func SavePersistedNodes(stacksDir string, nodes []model.Node) error {
 	}
 
 	// Sort nodes deterministically before saving
-	sorted := make([]model.Node, len(nodes))
+	sorted := make([]Node, len(nodes))
 	copy(sorted, nodes)
 	sort.Slice(sorted, func(i, j int) bool {
 		if sorted[i].Name == sorted[j].Name {

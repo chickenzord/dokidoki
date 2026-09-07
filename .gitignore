@@ -37,3 +37,7 @@ web/node_modules/
 web/dist/
 web/.vite/
 *.tsbuildinfo
+
+# Agents and skills
+.agents/
+skills-lock.json

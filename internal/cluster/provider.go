@@ -19,10 +19,13 @@ type PeerEvent struct {
 	Addresses []string  `json:"addresses"`
 }
 
-// DiscoveryProvider defines the interface for peer discovery mechanisms
+// Provider defines the interface for peer discovery mechanisms
 // such as static seed peers, LAN mDNS broadcast, or peer exchange (PEX).
-type DiscoveryProvider interface {
+type Provider interface {
 	Name() string
 	Start(ctx context.Context, events chan<- PeerEvent) error
 	Stop() error
 }
+
+// DiscoveryProvider is an alias for Provider.
+type DiscoveryProvider = Provider

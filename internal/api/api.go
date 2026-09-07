@@ -4,10 +4,9 @@ import (
 	"encoding/json"
 	"net/http"
 
-	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
-	"github.com/chickenzord/dokidoki/internal/stacks"
+	"github.com/chickenzord/dokidoki/internal/stack"
 	"github.com/chickenzord/dokidoki/web"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -18,33 +17,33 @@ import (
 type Server struct {
 	cfg             *config.Config
 	dockerCli       docker.Client
-	scanner         *stacks.Scanner
+	stackSvc        StackService
+	clusterSvc      ClusterService
 	stacksDir       string
-	clusterManager  *cluster.Manager
 	selfContainerID string
 }
 
 // NewServer creates a new API Server instance.
-func NewServer(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager, selfContainerID string) *Server {
+func NewServer(cfg *config.Config, dockerCli docker.Client, stackSvc StackService, clusterSvc ClusterService, selfContainerID string) *Server {
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
-	if scanner == nil {
-		scanner = stacks.NewScanner(cfg.StacksDir)
+	if stackSvc == nil {
+		stackSvc = stack.NewService(stack.NewScanner(cfg.StacksDir), dockerCli, selfContainerID)
 	}
 	return &Server{
 		cfg:             cfg,
 		dockerCli:       dockerCli,
-		scanner:         scanner,
+		stackSvc:        stackSvc,
+		clusterSvc:      clusterSvc,
 		stacksDir:       cfg.StacksDir,
-		clusterManager:  clusterManager,
 		selfContainerID: selfContainerID,
 	}
 }
 
 // NewRouter creates and configures the chi Router for Dokidoki.
-func NewRouter(cfg *config.Config, dockerCli docker.Client, scanner *stacks.Scanner, clusterManager *cluster.Manager, selfContainerID string) http.Handler {
-	s := NewServer(cfg, dockerCli, scanner, clusterManager, selfContainerID)
+func NewRouter(cfg *config.Config, dockerCli docker.Client, stackSvc StackService, clusterSvc ClusterService, selfContainerID string) http.Handler {
+	s := NewServer(cfg, dockerCli, stackSvc, clusterSvc, selfContainerID)
 	return s.Routes()
 }
 

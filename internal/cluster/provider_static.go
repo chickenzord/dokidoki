@@ -10,13 +10,12 @@ import (
 	"time"
 
 	"github.com/chickenzord/dokidoki/internal/logger"
-	"github.com/chickenzord/dokidoki/internal/model"
 )
 
 // StaticProvider discovers peers from configured bootstrap URLs.
 type StaticProvider struct {
 	bootstrapURLs []string
-	self          model.Node
+	self          Node
 	clusterToken  string
 	client        *http.Client
 	retryInterval time.Duration
@@ -27,7 +26,7 @@ type StaticProvider struct {
 }
 
 // NewStaticProvider creates a new StaticProvider.
-func NewStaticProvider(bootstrapURLs []string, self model.Node, clusterToken string, client *http.Client) *StaticProvider {
+func NewStaticProvider(bootstrapURLs []string, self Node, clusterToken string, client *http.Client) *StaticProvider {
 	if client == nil {
 		client = &http.Client{
 			Timeout: 5 * time.Second,
@@ -106,7 +105,7 @@ func (p *StaticProvider) probeAll(events chan<- PeerEvent) {
 func (p *StaticProvider) probe(baseURL string, events chan<- PeerEvent) {
 	target := baseURL + "/api/v1/cluster/handshake"
 
-	handshakeReq := model.HandshakeRequest{
+	handshakeReq := HandshakeRequest{
 		NodeID:       p.self.ID,
 		Name:         p.self.Name,
 		Addresses:    p.self.Addresses,
@@ -141,7 +140,7 @@ func (p *StaticProvider) probe(baseURL string, events chan<- PeerEvent) {
 		return
 	}
 
-	var hsResp model.HandshakeResponse
+	var hsResp HandshakeResponse
 	if err := json.NewDecoder(resp.Body).Decode(&hsResp); err != nil {
 		return
 	}
