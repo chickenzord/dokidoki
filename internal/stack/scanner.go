@@ -25,6 +25,14 @@ func NewScanner(stacksDir string) *Scanner {
 	return &Scanner{stacksDir: stacksDir}
 }
 
+// StacksDir returns the configured stacks directory path.
+func (s *Scanner) StacksDir() string {
+	if s == nil {
+		return ""
+	}
+	return s.stacksDir
+}
+
 // Scan searches the configured stacks directory for stacks.
 func (s *Scanner) Scan() ([]Discovered, error) {
 	return ScanDir(s.stacksDir)

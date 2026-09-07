@@ -77,3 +77,33 @@ type EnrichedContainerInspect struct {
 	IsSelf      bool   `json:"is_self"`
 }
 
+// StackFile represents a file within a stack directory.
+type StackFile struct {
+	Name      string `json:"name"`
+	Path      string `json:"path"`
+	Size      int64  `json:"size"`
+	Content   string `json:"content,omitempty"`
+	IsCompose bool   `json:"isCompose"`
+	IsEnv     bool   `json:"isEnv"`
+}
+
+// StackFilesResponse lists all files in a stack directory.
+type StackFilesResponse struct {
+	Stack string      `json:"stack"`
+	Dir   string      `json:"dir"`
+	Files []StackFile `json:"files"`
+}
+
+// CreateStackRequest specifies the parameters to create or import a stack.
+type CreateStackRequest struct {
+	Name        string `json:"name"`
+	Content     string `json:"content,omitempty"`
+	ComposePath string `json:"composePath,omitempty"`
+}
+
+// ContainerComposeResponse represents the generated Docker Compose content for a container.
+type ContainerComposeResponse struct {
+	StackName string `json:"stackName"`
+	Content   string `json:"content"`
+}
+

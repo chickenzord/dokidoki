@@ -997,5 +997,248 @@ func TestHeartbeatLogDebugLevel(t *testing.T) {
 	}
 }
 
+func TestCreateStack(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, tempDir := setupTestServer(t, m)
+
+	// 1. Success with content
+	payload := `{"name": "new-api-stack", "content": "services:\n  app:\n    image: node:18\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201 Created, got %d: %s", w.Code, w.Body.String())
+	}
+	var summary stack.Summary
+	if err := json.Unmarshal(w.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if summary.Name != "new-api-stack" || summary.Source != "managed" {
+		t.Errorf("unexpected summary: %+v", summary)
+	}
+
+	// Verify file was written
+	composePath := filepath.Join(tempDir, "new-api-stack", "compose.yaml")
+	data, err := os.ReadFile(composePath)
+	if err != nil {
+		t.Fatalf("failed to read created file: %v", err)
+	}
+	if !strings.Contains(string(data), "image: node:18") {
+		t.Errorf("unexpected file content: %s", string(data))
+	}
+
+	// 2. Empty name -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/stacks", strings.NewReader(`{"name": ""}`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty name, got %d", w.Code)
+	}
+
+	// 3. Invalid body -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/stacks", strings.NewReader(`{invalid json`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for invalid body, got %d", w.Code)
+	}
+}
+
+func TestUpdateStack(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, tempDir := setupTestServer(t, m)
+
+	// Update existing web-stack
+	payload := `{"content": "services:\n  web:\n    image: nginx:1.25-alpine\n"}`
+	req := httptest.NewRequest(http.MethodPut, "/api/v1/stacks/web-stack", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 OK, got %d: %s", w.Code, w.Body.String())
+	}
+	var summary stack.Summary
+	if err := json.Unmarshal(w.Body.Bytes(), &summary); err != nil {
+		t.Fatalf("failed to unmarshal response: %v", err)
+	}
+	if summary.Name != "web-stack" || summary.Source != "managed" {
+		t.Errorf("unexpected summary: %+v", summary)
+	}
+
+	data, err := os.ReadFile(filepath.Join(tempDir, "web-stack", "compose.yaml"))
+	if err != nil {
+		t.Fatalf("failed to read updated file: %v", err)
+	}
+	if !strings.Contains(string(data), "image: nginx:1.25-alpine") {
+		t.Errorf("unexpected updated content: %s", string(data))
+	}
+}
+
+func TestGetStackFiles(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, tempDir := setupTestServer(t, m)
+
+	// Add an env file to web-stack
+	_ = os.WriteFile(filepath.Join(tempDir, "web-stack", ".env"), []byte("PORT=80\n"), 0644)
+
+	// 1. Success GET
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack/files", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp stack.StackFilesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if resp.Stack != "web-stack" || len(resp.Files) != 2 {
+		t.Fatalf("unexpected files response: %+v", resp)
+	}
+
+	// 2. Not found
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/unknown-stack/files", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for unknown stack files, got %d", w.Code)
+	}
+}
+
+func TestGetStackFile(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// 1. Success GET JSON
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack/files/compose.yaml", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var file stack.StackFile
+	if err := json.Unmarshal(w.Body.Bytes(), &file); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if file.Name != "compose.yaml" || !file.IsCompose || !strings.Contains(file.Content, "image: nginx") {
+		t.Fatalf("unexpected stack file: %+v", file)
+	}
+
+	// 2. Success GET raw text via Accept
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack/files/compose.yaml", nil)
+	req.Header.Set("Accept", "text/plain")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(w.Body.String(), "image: nginx") {
+		t.Fatalf("unexpected plain text body: %s", w.Body.String())
+	}
+
+	// 3. File not found
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/web-stack/files/missing.txt", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing file, got %d", w.Code)
+	}
+}
+
+func TestGetContainerCompose(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			if id == "cid-1" {
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   "cid-1",
+						Name: "/web-stack_web_1",
+						HostConfig: &container.HostConfig{
+							RestartPolicy: container.RestartPolicy{Name: "always"},
+						},
+					},
+					Config: &container.Config{
+						Image: "nginx:latest",
+						Labels: map[string]string{
+							docker.ComposeProjectLabel: "web-stack",
+							docker.ComposeServiceLabel: "web",
+						},
+					},
+				}, nil
+			}
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("no such container"))
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// 1. Success JSON
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/compose", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var resp stack.ContainerComposeResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if resp.StackName != "web-stack" || !strings.Contains(resp.Content, "image: nginx:latest") {
+		t.Fatalf("unexpected compose response: %+v", resp)
+	}
+
+	// 2. Accept: text/yaml
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/compose", nil)
+	req.Header.Set("Accept", "text/yaml")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	ct := w.Header().Get("Content-Type")
+	if !strings.Contains(ct, "text/yaml") {
+		t.Errorf("expected Content-Type text/yaml, got %s", ct)
+	}
+	if !strings.Contains(w.Body.String(), "image: nginx:latest") {
+		t.Errorf("unexpected yaml content: %s", w.Body.String())
+	}
+
+	// 3. Not Found
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/containers/missing-id/compose", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("expected 404 for missing container, got %d", w.Code)
+	}
+}
+
 
 

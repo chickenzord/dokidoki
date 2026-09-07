@@ -67,13 +67,18 @@ func (s *Server) Routes() http.Handler {
 	r.Route("/api/v1", func(r chi.Router) {
 		// Stacks routes
 		r.Get("/stacks", s.handleListStacks)
+		r.Post("/stacks", s.handleCreateStack)
 		r.Get("/stacks/{name}", s.handleGetStack)
+		r.Put("/stacks/{name}", s.handleUpdateStack)
 		r.Get("/stacks/{name}/compose", s.handleGetStackCompose)
 		r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
+		r.Get("/stacks/{name}/files", s.handleGetStackFiles)
+		r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
 
 		// Containers routes
 		r.Get("/containers", s.handleListContainers)
 		r.Get("/containers/{id}", s.handleInspectContainer)
+		r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
 
 		// Host routes
 		r.Get("/host", s.handleHostInfo)

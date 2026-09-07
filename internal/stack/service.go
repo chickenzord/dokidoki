@@ -4,11 +4,16 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
+	"path/filepath"
+	"sort"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -251,4 +256,499 @@ func (s *Service) InspectContainer(ctx context.Context, id string) (*EnrichedCon
 		IsSelf:        isSelf,
 	}
 	return enriched, nil
+}
+
+func (s *Service) stacksDir() string {
+	if s.scanner != nil {
+		return s.scanner.StacksDir()
+	}
+	return ""
+}
+
+func isComposeFilename(name string) bool {
+	lower := strings.ToLower(name)
+	for _, candidate := range ComposeFileCandidates {
+		if lower == candidate {
+			return true
+		}
+	}
+	return false
+}
+
+func isEnvFilename(name string) bool {
+	lower := strings.ToLower(name)
+	return strings.HasPrefix(lower, ".env") || strings.HasSuffix(lower, ".env")
+}
+
+func isValidStackName(name string) bool {
+	if name == "" {
+		return false
+	}
+	for _, ch := range name {
+		if !((ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') || ch == '-' || ch == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// GetStackFiles returns all readable configuration and env files for a stack directory.
+// For external stacks whose compose file is outside the volume mount, a stubbed compose.yaml is returned.
+func (s *Service) GetStackFiles(ctx context.Context, name string) (*StackFilesResponse, error) {
+	categorized, _, err := s.getCategorized(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	detail, found := categorized.GetStack(name)
+	if !found {
+		return nil, ErrNotFound
+	}
+
+	if detail.Source == string(SourceExternal) {
+		detectedPath := detail.ComposePath
+		if detectedPath == "" {
+			for _, c := range detail.Containers {
+				if p, ok := c.Labels["com.docker.compose.project.config_files"]; ok && p != "" {
+					detectedPath = strings.Split(p, ",")[0]
+					break
+				}
+			}
+		}
+
+		if detectedPath != "" {
+			fi, statErr := os.Stat(detectedPath)
+			if statErr == nil && !fi.IsDir() {
+				data, readErr := os.ReadFile(detectedPath)
+				if readErr == nil {
+					var content string
+					if fi.Size() < 256*1024 && utf8.Valid(data) {
+						content = string(data)
+					}
+					return &StackFilesResponse{
+						Stack: name,
+						Dir:   filepath.Dir(detectedPath),
+						Files: []StackFile{
+							{
+								Name:      filepath.Base(detectedPath),
+								Path:      detectedPath,
+								Size:      fi.Size(),
+								Content:   content,
+								IsCompose: true,
+								IsEnv:     false,
+							},
+						},
+					}, nil
+				}
+			}
+		}
+
+		// File is outside dokidoki volume mount or not readable: stub compose.yaml
+		stubContent := fmt.Sprintf("# External stack detected: %s\n# Host compose path: %s\n# Note: Path is outside Dokidoki volume mount.\n# Provide compose content to import and manage this stack in Dokidoki.\n", name, detectedPath)
+		dir := ""
+		if detectedPath != "" {
+			dir = filepath.Dir(detectedPath)
+		}
+		return &StackFilesResponse{
+			Stack: name,
+			Dir:   dir,
+			Files: []StackFile{
+				{
+					Name:      "compose.yaml",
+					Path:      detectedPath,
+					Size:      int64(len(stubContent)),
+					Content:   stubContent,
+					IsCompose: true,
+					IsEnv:     false,
+				},
+			},
+		}, nil
+	}
+
+	// Managed stack
+	stacksDir := s.stacksDir()
+	if stacksDir == "" {
+		return nil, errors.New("stacks directory is not configured")
+	}
+
+	stackDir := filepath.Join(stacksDir, name)
+	entries, err := os.ReadDir(stackDir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, fmt.Errorf("failed to read stack directory: %w", err)
+	}
+
+	files := make([]StackFile, 0)
+	for _, entry := range entries {
+		if entry.IsDir() {
+			continue
+		}
+		entryName := entry.Name()
+		// Exclude dotfiles except .env*
+		if strings.HasPrefix(entryName, ".") && !strings.HasPrefix(entryName, ".env") {
+			continue
+		}
+
+		fullPath := filepath.Join(stackDir, entryName)
+		fi, err := entry.Info()
+		if err != nil {
+			continue
+		}
+
+		isCompose := isComposeFilename(entryName)
+		isEnv := isEnvFilename(entryName)
+
+		var content string
+		if fi.Size() < 256*1024 {
+			data, err := os.ReadFile(fullPath)
+			if err == nil && utf8.Valid(data) {
+				content = string(data)
+			}
+		}
+
+		files = append(files, StackFile{
+			Name:      entryName,
+			Path:      fullPath,
+			Size:      fi.Size(),
+			Content:   content,
+			IsCompose: isCompose,
+			IsEnv:     isEnv,
+		})
+	}
+
+	sort.Slice(files, func(i, j int) bool {
+		if files[i].IsCompose != files[j].IsCompose {
+			return files[i].IsCompose
+		}
+		if files[i].IsEnv != files[j].IsEnv {
+			return files[i].IsEnv
+		}
+		return files[i].Name < files[j].Name
+	})
+
+	return &StackFilesResponse{
+		Stack: name,
+		Dir:   stackDir,
+		Files: files,
+	}, nil
+}
+
+// GetStackFile returns a single file from the stack directory with path traversal protection.
+func (s *Service) GetStackFile(ctx context.Context, name, filename string) (*StackFile, error) {
+	cleanName := filepath.Clean(strings.TrimSpace(name))
+	if cleanName == "" || cleanName == "." || filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, "..") {
+		return nil, errors.New("invalid stack name: path traversal detected")
+	}
+
+	cleanFilename := filepath.Clean(strings.TrimSpace(filename))
+	if cleanFilename == "" || cleanFilename == "." || filepath.IsAbs(cleanFilename) || strings.HasPrefix(cleanFilename, "..") {
+		return nil, errors.New("invalid filename: path traversal detected")
+	}
+
+	categorized, _, err := s.getCategorized(ctx)
+	if err != nil {
+		return nil, err
+	}
+
+	detail, found := categorized.GetStack(cleanName)
+	if !found {
+		return nil, ErrNotFound
+	}
+
+	if detail.Source == string(SourceExternal) {
+		detectedPath := detail.ComposePath
+		if detectedPath == "" {
+			for _, c := range detail.Containers {
+				if p, ok := c.Labels["com.docker.compose.project.config_files"]; ok && p != "" {
+					detectedPath = strings.Split(p, ",")[0]
+					break
+				}
+			}
+		}
+
+		isComposeCandidate := isComposeFilename(cleanFilename) || (detectedPath != "" && cleanFilename == filepath.Base(detectedPath))
+		if !isComposeCandidate {
+			return nil, ErrNotFound
+		}
+
+		if detectedPath != "" {
+			fi, statErr := os.Stat(detectedPath)
+			if statErr == nil && !fi.IsDir() {
+				data, readErr := os.ReadFile(detectedPath)
+				if readErr == nil {
+					var content string
+					if fi.Size() < 256*1024 && utf8.Valid(data) {
+						content = string(data)
+					}
+					return &StackFile{
+						Name:      filepath.Base(detectedPath),
+						Path:      detectedPath,
+						Size:      fi.Size(),
+						Content:   content,
+						IsCompose: true,
+						IsEnv:     false,
+					}, nil
+				}
+			}
+		}
+
+		// Stub external compose.yaml
+		stubContent := fmt.Sprintf("# External stack detected: %s\n# Host compose path: %s\n# Note: Path is outside Dokidoki volume mount.\n# Provide compose content to import and manage this stack in Dokidoki.\n", cleanName, detectedPath)
+		return &StackFile{
+			Name:      "compose.yaml",
+			Path:      detectedPath,
+			Size:      int64(len(stubContent)),
+			Content:   stubContent,
+			IsCompose: true,
+			IsEnv:     false,
+		}, nil
+	}
+
+	// Managed stack
+	stacksDir := s.stacksDir()
+	if stacksDir == "" {
+		return nil, errors.New("stacks directory is not configured")
+	}
+
+	stackDir := filepath.Join(stacksDir, cleanName)
+	targetPath := filepath.Clean(filepath.Join(stackDir, cleanFilename))
+
+	rel, err := filepath.Rel(stackDir, targetPath)
+	if err != nil || strings.HasPrefix(rel, "..") || rel == "." {
+		return nil, errors.New("invalid file path: path traversal detected")
+	}
+
+	fi, err := os.Stat(targetPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, ErrNotFound
+		}
+		return nil, err
+	}
+	if fi.IsDir() {
+		return nil, errors.New("requested path is a directory")
+	}
+
+	var content string
+	if fi.Size() < 256*1024 {
+		data, err := os.ReadFile(targetPath)
+		if err == nil && utf8.Valid(data) {
+			content = string(data)
+		}
+	}
+
+	return &StackFile{
+		Name:      fi.Name(),
+		Path:      targetPath,
+		Size:      fi.Size(),
+		Content:   content,
+		IsCompose: isComposeFilename(fi.Name()),
+		IsEnv:     isEnvFilename(fi.Name()),
+	}, nil
+}
+
+// CreateOrImportStack creates or imports a stack into Dokidoki's managed stacks directory.
+func (s *Service) CreateOrImportStack(ctx context.Context, req CreateStackRequest) (*Summary, error) {
+	name := strings.TrimSpace(req.Name)
+	if name == "" {
+		return nil, errors.New("stack name is required")
+	}
+	if !isValidStackName(name) {
+		return nil, errors.New("invalid stack name: must contain only alphanumeric characters, hyphens, and underscores")
+	}
+
+	stacksDir := s.stacksDir()
+	if stacksDir == "" {
+		return nil, errors.New("stacks directory is not configured")
+	}
+
+	stackDir := filepath.Join(stacksDir, name)
+	content := strings.TrimSpace(req.Content)
+
+	if content == "" && req.ComposePath != "" {
+		if data, err := os.ReadFile(req.ComposePath); err == nil && len(data) > 0 {
+			content = string(data)
+		}
+	}
+
+	if content == "" {
+		categorized, _, _ := s.getCategorized(ctx)
+		if categorized != nil {
+			if detail, ok := categorized.GetStack(name); ok {
+				if detail.ComposePath != "" {
+					if data, err := os.ReadFile(detail.ComposePath); err == nil && len(data) > 0 {
+						content = string(data)
+					}
+				}
+				if content == "" {
+					for _, c := range detail.Containers {
+						if comp, err := s.GetContainerCompose(ctx, c.ID); err == nil && comp.Content != "" {
+							content = comp.Content
+							break
+						}
+					}
+				}
+			}
+		}
+	}
+
+	if content == "" {
+		// Starter compose template
+		content = fmt.Sprintf("services:\n  %s:\n    image: nginx:alpine\n    restart: unless-stopped\n", name)
+	}
+
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		return nil, fmt.Errorf("failed to create stack directory: %w", err)
+	}
+
+	composePath := filepath.Join(stackDir, "compose.yaml")
+	if err := os.WriteFile(composePath, []byte(content), 0644); err != nil {
+		return nil, fmt.Errorf("failed to write compose file: %w", err)
+	}
+
+	detail, err := s.GetStack(ctx, name)
+	if err == nil {
+		return &detail.Summary, nil
+	}
+
+	return &Summary{
+		Name:           name,
+		Source:         string(SourceManaged),
+		ComposePresent: true,
+		ComposePath:    composePath,
+		Rollup:         Rollup{},
+		Services:       []string{},
+	}, nil
+}
+
+type composeServiceConfig struct {
+	Image       string   `yaml:"image,omitempty"`
+	Command     string   `yaml:"command,omitempty"`
+	Restart     string   `yaml:"restart,omitempty"`
+	Ports       []string `yaml:"ports,omitempty"`
+	Environment []string `yaml:"environment,omitempty"`
+	Volumes     []string `yaml:"volumes,omitempty"`
+}
+
+type composeConfigDoc struct {
+	Services map[string]composeServiceConfig `yaml:"services"`
+}
+
+// GetContainerCompose inspects a container and generates standard Docker Compose YAML.
+func (s *Service) GetContainerCompose(ctx context.Context, id string) (*ContainerComposeResponse, error) {
+	if s.dockerCli == nil {
+		return nil, ErrContainerNotFound
+	}
+
+	inspect, err := s.dockerCli.InspectContainer(ctx, id)
+	if err != nil {
+		if client.IsErrNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "no such container") {
+			return nil, ErrContainerNotFound
+		}
+		return nil, err
+	}
+
+	if inspect.Config == nil {
+		return nil, errors.New("container config is nil")
+	}
+
+	serviceName := ""
+	stackName := ""
+	if inspect.Config.Labels != nil {
+		serviceName = inspect.Config.Labels[docker.ComposeServiceLabel]
+		stackName = inspect.Config.Labels[docker.ComposeProjectLabel]
+	}
+	if serviceName == "" {
+		serviceName = strings.TrimPrefix(inspect.Name, "/")
+	}
+	if serviceName == "" {
+		serviceName = "app"
+	}
+	serviceName = strings.ReplaceAll(serviceName, " ", "_")
+	if stackName == "" {
+		stackName = serviceName
+	}
+
+	svc := composeServiceConfig{
+		Image: inspect.Config.Image,
+	}
+
+	if len(inspect.Config.Cmd) > 0 {
+		svc.Command = strings.Join(inspect.Config.Cmd, " ")
+	}
+
+	if inspect.HostConfig != nil {
+		restart := inspect.HostConfig.RestartPolicy.Name
+		if restart != "" && restart != "no" {
+			svc.Restart = string(restart)
+		}
+
+		// Ports
+		if len(inspect.HostConfig.PortBindings) > 0 {
+			for containerPort, bindings := range inspect.HostConfig.PortBindings {
+				portStr := string(containerPort)
+				if strings.HasSuffix(portStr, "/tcp") {
+					portStr = strings.TrimSuffix(portStr, "/tcp")
+				}
+				for _, b := range bindings {
+					p := ""
+					if b.HostIP != "" && b.HostIP != "0.0.0.0" && b.HostIP != "::" {
+						p = fmt.Sprintf("%s:%s:%s", b.HostIP, b.HostPort, portStr)
+					} else if b.HostPort != "" {
+						p = fmt.Sprintf("%s:%s", b.HostPort, portStr)
+					} else {
+						p = portStr
+					}
+					svc.Ports = append(svc.Ports, p)
+				}
+			}
+			sort.Strings(svc.Ports)
+		}
+
+		// Volumes / Binds
+		if len(inspect.HostConfig.Binds) > 0 {
+			svc.Volumes = append(svc.Volumes, inspect.HostConfig.Binds...)
+		} else if len(inspect.Mounts) > 0 {
+			for _, m := range inspect.Mounts {
+				src := m.Source
+				if m.Type == "volume" && m.Name != "" {
+					src = m.Name
+				}
+				bindStr := fmt.Sprintf("%s:%s", src, m.Destination)
+				if !m.RW {
+					bindStr += ":ro"
+				}
+				svc.Volumes = append(svc.Volumes, bindStr)
+			}
+		}
+		if len(svc.Volumes) > 0 {
+			sort.Strings(svc.Volumes)
+		}
+	}
+
+	// Environment
+	if len(inspect.Config.Env) > 0 {
+		envList := make([]string, len(inspect.Config.Env))
+		copy(envList, inspect.Config.Env)
+		sort.Strings(envList)
+		svc.Environment = envList
+	}
+
+	doc := composeConfigDoc{
+		Services: map[string]composeServiceConfig{
+			serviceName: svc,
+		},
+	}
+
+	yamlData, err := yaml.Marshal(doc)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal compose yaml: %w", err)
+	}
+
+	return &ContainerComposeResponse{
+		StackName: stackName,
+		Content:   string(yamlData),
+	}, nil
 }

@@ -1,4 +1,15 @@
-import { HostInfo, Node, PingResponse, StackSummary, ContainerSummary } from '../types';
+import {
+  HostInfo,
+  Node,
+  PingResponse,
+  StackSummary,
+  ContainerSummary,
+  StackFile,
+  StackFilesResponse,
+  CreateStackRequest,
+  ContainerComposeResponse,
+  EnrichedContainerInspect,
+} from '../types';
 
 class ApiService {
   private activeEndpoint: string = '';
@@ -124,6 +135,38 @@ class ApiService {
 
   public async getContainer(id: string, customEndpoint?: string): Promise<ContainerSummary> {
     return this.request<ContainerSummary>(`/api/v1/containers/${encodeURIComponent(id)}`, { method: 'GET' }, customEndpoint);
+  }
+
+  public async inspectContainer(id: string, customEndpoint?: string): Promise<EnrichedContainerInspect> {
+    return this.request<EnrichedContainerInspect>(`/api/v1/containers/${encodeURIComponent(id)}`, { method: 'GET' }, customEndpoint);
+  }
+
+  public async createStack(data: CreateStackRequest, customEndpoint?: string): Promise<StackSummary> {
+    return this.request<StackSummary>('/api/v1/stacks', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }, customEndpoint);
+  }
+
+  public async updateStack(name: string, data: Partial<CreateStackRequest>, customEndpoint?: string): Promise<StackSummary> {
+    return this.request<StackSummary>(`/api/v1/stacks/${encodeURIComponent(name)}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(data),
+    }, customEndpoint);
+  }
+
+  public async getStackFiles(name: string, customEndpoint?: string): Promise<StackFilesResponse> {
+    return this.request<StackFilesResponse>(`/api/v1/stacks/${encodeURIComponent(name)}/files`, { method: 'GET' }, customEndpoint);
+  }
+
+  public async getStackFile(name: string, filename: string, customEndpoint?: string): Promise<StackFile> {
+    return this.request<StackFile>(`/api/v1/stacks/${encodeURIComponent(name)}/files/${encodeURIComponent(filename)}`, { method: 'GET' }, customEndpoint);
+  }
+
+  public async getContainerCompose(id: string, customEndpoint?: string): Promise<ContainerComposeResponse> {
+    return this.request<ContainerComposeResponse>(`/api/v1/containers/${encodeURIComponent(id)}/compose`, { method: 'GET' }, customEndpoint);
   }
 }
 

@@ -16,6 +16,10 @@ type StackService interface {
 	GetStackContainers(ctx context.Context, name string) ([]docker.Container, error)
 	ListContainers(ctx context.Context, stackFilter string, grouped bool) (any, error)
 	InspectContainer(ctx context.Context, id string) (*stack.EnrichedContainerInspect, error)
+	GetStackFiles(ctx context.Context, name string) (*stack.StackFilesResponse, error)
+	GetStackFile(ctx context.Context, name, filename string) (*stack.StackFile, error)
+	CreateOrImportStack(ctx context.Context, req stack.CreateStackRequest) (*stack.Summary, error)
+	GetContainerCompose(ctx context.Context, id string) (*stack.ContainerComposeResponse, error)
 }
 
 // ClusterService defines the cluster coordination operations required by the API.

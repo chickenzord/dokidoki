@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/chickenzord/dokidoki/internal/docker"
@@ -12,6 +13,7 @@ import (
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/system"
 	errdefs "github.com/docker/docker/errdefs"
+	"github.com/docker/go-connections/nat"
 )
 
 func TestCalculateRollup(t *testing.T) {
@@ -1011,6 +1013,447 @@ func TestService_InspectContainer(t *testing.T) {
 
 	t.Run("NotFound", func(t *testing.T) {
 		_, err := svc.InspectContainer(ctx, "nonexistent")
+		if !errors.Is(err, ErrContainerNotFound) {
+			t.Fatalf("expected ErrContainerNotFound, got %v", err)
+		}
+	})
+}
+
+func TestService_GetStackFiles(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("ManagedStack", func(t *testing.T) {
+		tempDir := t.TempDir()
+		stackDir := filepath.Join(tempDir, "managed-app")
+		if err := os.MkdirAll(stackDir, 0755); err != nil {
+			t.Fatalf("failed to mkdir: %v", err)
+		}
+
+		_ = os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644)
+		_ = os.WriteFile(filepath.Join(stackDir, ".env"), []byte("PORT=80\n"), 0644)
+		_ = os.WriteFile(filepath.Join(stackDir, ".env.production"), []byte("PORT=8080\n"), 0644)
+		_ = os.WriteFile(filepath.Join(stackDir, "config.json"), []byte("{\"debug\": true}"), 0644)
+		_ = os.WriteFile(filepath.Join(stackDir, ".hidden_ignore"), []byte("ignored"), 0644)
+
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, &mockDockerClient{}, "")
+
+		resp, err := svc.GetStackFiles(ctx, "managed-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if resp.Stack != "managed-app" {
+			t.Errorf("expected stack name 'managed-app', got %s", resp.Stack)
+		}
+		if len(resp.Files) != 4 {
+			t.Fatalf("expected 4 files (excluding .hidden_ignore), got %d", len(resp.Files))
+		}
+
+		// Files should be sorted: compose first, then .env, then others
+		composeFile := resp.Files[0]
+		if composeFile.Name != "compose.yaml" || !composeFile.IsCompose || composeFile.IsEnv {
+			t.Errorf("expected compose.yaml as first file, got %+v", composeFile)
+		}
+		if !strings.Contains(composeFile.Content, "image: nginx") {
+			t.Errorf("expected compose file content, got %s", composeFile.Content)
+		}
+
+		envFile := resp.Files[1]
+		if !envFile.IsEnv || envFile.IsCompose {
+			t.Errorf("expected .env file with IsEnv=true, got %+v", envFile)
+		}
+	})
+
+	t.Run("ExternalStack_InaccessiblePath_Stubbed", func(t *testing.T) {
+		m := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    "ext-c1",
+						Names: []string{"/ext_web_1"},
+						Labels: map[string]string{
+							docker.ComposeProjectLabel:              "external-app",
+							docker.ComposeServiceLabel:              "web",
+							"com.docker.compose.project.config_files": "/host/outside/volume/docker-compose.yml",
+						},
+					},
+				}, nil
+			},
+		}
+
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, m, "")
+
+		resp, err := svc.GetStackFiles(ctx, "external-app")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if len(resp.Files) != 1 {
+			t.Fatalf("expected 1 stubbed compose file, got %d", len(resp.Files))
+		}
+
+		file := resp.Files[0]
+		if file.Name != "compose.yaml" || !file.IsCompose {
+			t.Errorf("expected compose.yaml with IsCompose=true, got %+v", file)
+		}
+		if !strings.Contains(file.Content, "# External stack detected: external-app") {
+			t.Errorf("expected external stack comment, got %s", file.Content)
+		}
+		if !strings.Contains(file.Content, "# Host compose path: /host/outside/volume/docker-compose.yml") {
+			t.Errorf("expected detectedPath comment, got %s", file.Content)
+		}
+		if !strings.Contains(file.Content, "# Note: Path is outside Dokidoki volume mount.") {
+			t.Errorf("expected volume mount note, got %s", file.Content)
+		}
+	})
+
+	t.Run("ExternalStack_AccessiblePath", func(t *testing.T) {
+		extDir := t.TempDir()
+		realComposePath := filepath.Join(extDir, "docker-compose.yml")
+		_ = os.WriteFile(realComposePath, []byte("services:\n  ext:\n    image: alpine\n"), 0644)
+
+		m := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    "ext-c2",
+						Names: []string{"/ext2_web_1"},
+						Labels: map[string]string{
+							docker.ComposeProjectLabel:              "accessible-ext",
+							docker.ComposeServiceLabel:              "web",
+							"com.docker.compose.project.config_files": realComposePath,
+						},
+					},
+				}, nil
+			},
+		}
+
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, m, "")
+
+		resp, err := svc.GetStackFiles(ctx, "accessible-ext")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if len(resp.Files) != 1 {
+			t.Fatalf("expected 1 file, got %d", len(resp.Files))
+		}
+		if !strings.Contains(resp.Files[0].Content, "image: alpine") {
+			t.Errorf("expected real file content, got %s", resp.Files[0].Content)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, &mockDockerClient{}, "")
+
+		_, err := svc.GetStackFiles(ctx, "unknown-stack")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+}
+
+func TestService_GetStackFile(t *testing.T) {
+	ctx := context.Background()
+	tempDir := t.TempDir()
+	stackDir := filepath.Join(tempDir, "my-app")
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		t.Fatalf("failed to mkdir: %v", err)
+	}
+
+	_ = os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte("services:\n  web:\n    image: nginx\n"), 0644)
+	_ = os.WriteFile(filepath.Join(stackDir, ".env"), []byte("KEY=VALUE\n"), 0644)
+
+	m := &mockDockerClient{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return []types.Container{
+				{
+					ID:    "ext-c1",
+					Names: []string{"/ext_web_1"},
+					Labels: map[string]string{
+						docker.ComposeProjectLabel:              "external-app",
+						docker.ComposeServiceLabel:              "web",
+						"com.docker.compose.project.config_files": "/opt/outside/compose.yaml",
+					},
+				},
+			}, nil
+		},
+	}
+
+	scanner := NewScanner(tempDir)
+	svc := NewService(scanner, m, "")
+
+	t.Run("FoundManaged", func(t *testing.T) {
+		f, err := svc.GetStackFile(ctx, "my-app", "compose.yaml")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Name != "compose.yaml" || !f.IsCompose || !strings.Contains(f.Content, "image: nginx") {
+			t.Errorf("unexpected file result: %+v", f)
+		}
+	})
+
+	t.Run("FoundEnv", func(t *testing.T) {
+		f, err := svc.GetStackFile(ctx, "my-app", ".env")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Name != ".env" || !f.IsEnv || !strings.Contains(f.Content, "KEY=VALUE") {
+			t.Errorf("unexpected file result: %+v", f)
+		}
+	})
+
+	t.Run("PathTraversalBlocked", func(t *testing.T) {
+		_, err := svc.GetStackFile(ctx, "my-app", "../../../etc/passwd")
+		if err == nil {
+			t.Fatal("expected error for path traversal, got nil")
+		}
+		if !strings.Contains(err.Error(), "path traversal") {
+			t.Errorf("expected path traversal error message, got %v", err)
+		}
+
+		_, err = svc.GetStackFile(ctx, "../../etc", "passwd")
+		if err == nil {
+			t.Fatal("expected error for stack name path traversal, got nil")
+		}
+	})
+
+	t.Run("FileNotFound", func(t *testing.T) {
+		_, err := svc.GetStackFile(ctx, "my-app", "nonexistent.yaml")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound, got %v", err)
+		}
+	})
+
+	t.Run("ExternalStack_StubbedCompose", func(t *testing.T) {
+		f, err := svc.GetStackFile(ctx, "external-app", "compose.yaml")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if f.Name != "compose.yaml" || !f.IsCompose {
+			t.Errorf("expected stubbed compose.yaml, got %+v", f)
+		}
+		if !strings.Contains(f.Content, "# External stack detected: external-app") {
+			t.Errorf("expected stub content, got %s", f.Content)
+		}
+
+		// Other files on external stack should not be found
+		_, err = svc.GetStackFile(ctx, "external-app", ".env")
+		if !errors.Is(err, ErrNotFound) {
+			t.Fatalf("expected ErrNotFound for non-compose on external stack, got %v", err)
+		}
+	})
+}
+
+func TestService_CreateOrImportStack(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("CreateWithContent", func(t *testing.T) {
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, &mockDockerClient{}, "")
+
+		req := CreateStackRequest{
+			Name:    "new-custom-stack",
+			Content: "services:\n  redis:\n    image: redis:alpine\n",
+		}
+
+		summary, err := svc.CreateOrImportStack(ctx, req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if summary.Name != "new-custom-stack" || summary.Source != string(SourceManaged) || !summary.ComposePresent {
+			t.Errorf("unexpected summary: %+v", summary)
+		}
+
+		// Verify file written
+		data, err := os.ReadFile(filepath.Join(tempDir, "new-custom-stack", "compose.yaml"))
+		if err != nil {
+			t.Fatalf("failed to read created compose file: %v", err)
+		}
+		if !strings.Contains(string(data), "image: redis:alpine") {
+			t.Errorf("unexpected file content: %s", string(data))
+		}
+	})
+
+	t.Run("CreateWithEmptyContent_StarterTemplate", func(t *testing.T) {
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, &mockDockerClient{}, "")
+
+		req := CreateStackRequest{
+			Name: "starter-stack",
+		}
+
+		summary, err := svc.CreateOrImportStack(ctx, req)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if summary.Name != "starter-stack" || summary.Source != string(SourceManaged) {
+			t.Errorf("unexpected summary: %+v", summary)
+		}
+
+		data, err := os.ReadFile(filepath.Join(tempDir, "starter-stack", "compose.yaml"))
+		if err != nil {
+			t.Fatalf("failed to read created compose file: %v", err)
+		}
+		if !strings.Contains(string(data), "nginx:alpine") {
+			t.Errorf("expected starter template, got %s", string(data))
+		}
+	})
+
+	t.Run("ImportExternalStack", func(t *testing.T) {
+		m := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    "ext-cid-1",
+						Names: []string{"/ext_app_1"},
+						Labels: map[string]string{
+							docker.ComposeProjectLabel: "ext-to-import",
+							docker.ComposeServiceLabel: "app",
+						},
+					},
+				}, nil
+			},
+			inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   "ext-cid-1",
+						Name: "/ext_app_1",
+					},
+					Config: &container.Config{
+						Image: "golang:1.24",
+						Labels: map[string]string{
+							docker.ComposeProjectLabel: "ext-to-import",
+							docker.ComposeServiceLabel: "app",
+						},
+					},
+				}, nil
+			},
+		}
+
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, m, "")
+
+		// Initial check: it is external
+		detail, err := svc.GetStack(ctx, "ext-to-import")
+		if err != nil || detail.Source != string(SourceExternal) {
+			t.Fatalf("expected stack to initially be external, got err=%v detail=%+v", err, detail)
+		}
+
+		// Import it
+		summary, err := svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "ext-to-import"})
+		if err != nil {
+			t.Fatalf("failed to import stack: %v", err)
+		}
+
+		if summary.Source != string(SourceManaged) {
+			t.Errorf("expected stack to be managed after import, got %s", summary.Source)
+		}
+	})
+
+	t.Run("InvalidName", func(t *testing.T) {
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, &mockDockerClient{}, "")
+
+		_, err := svc.CreateOrImportStack(ctx, CreateStackRequest{Name: ""})
+		if err == nil {
+			t.Error("expected error for empty name")
+		}
+
+		_, err = svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "../traversal"})
+		if err == nil {
+			t.Error("expected error for path traversal name")
+		}
+
+		_, err = svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "bad name with spaces"})
+		if err == nil {
+			t.Error("expected error for invalid characters")
+		}
+	})
+}
+
+func TestService_GetContainerCompose(t *testing.T) {
+	ctx := context.Background()
+
+	m := &mockDockerClient{
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			if id == "redis-container" {
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{
+						ID:   "redis-container",
+						Name: "/my_redis",
+						HostConfig: &container.HostConfig{
+							RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+							PortBindings: nat.PortMap{
+								"6379/tcp": []nat.PortBinding{{HostPort: "6379"}},
+							},
+							Binds: []string{"/host/data:/data"},
+						},
+					},
+					Config: &container.Config{
+						Image: "redis:7.0-alpine",
+						Cmd:   []string{"redis-server", "--appendonly", "yes"},
+						Env:   []string{"REDIS_PASSWORD=secret"},
+						Labels: map[string]string{
+							docker.ComposeProjectLabel: "redis-stack",
+							docker.ComposeServiceLabel: "redis",
+						},
+					},
+				}, nil
+			}
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("no such container"))
+		},
+	}
+
+	tempDir := t.TempDir()
+	scanner := NewScanner(tempDir)
+	svc := NewService(scanner, m, "")
+
+	t.Run("Success", func(t *testing.T) {
+		resp, err := svc.GetContainerCompose(ctx, "redis-container")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		if resp.StackName != "redis-stack" {
+			t.Errorf("expected stack name redis-stack, got %s", resp.StackName)
+		}
+
+		content := resp.Content
+		if !strings.Contains(content, "image: redis:7.0-alpine") {
+			t.Errorf("missing image in compose: %s", content)
+		}
+		if !strings.Contains(content, "redis-server --appendonly yes") {
+			t.Errorf("missing command in compose: %s", content)
+		}
+		if !strings.Contains(content, "restart: unless-stopped") {
+			t.Errorf("missing restart in compose: %s", content)
+		}
+		if !strings.Contains(content, "6379:6379") {
+			t.Errorf("missing port in compose: %s", content)
+		}
+		if !strings.Contains(content, "REDIS_PASSWORD=secret") {
+			t.Errorf("missing env in compose: %s", content)
+		}
+		if !strings.Contains(content, "/host/data:/data") {
+			t.Errorf("missing volume bind in compose: %s", content)
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		_, err := svc.GetContainerCompose(ctx, "nonexistent")
 		if !errors.Is(err, ErrContainerNotFound) {
 			t.Fatalf("expected ErrContainerNotFound, got %v", err)
 		}
