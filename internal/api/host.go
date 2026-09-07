@@ -14,7 +14,12 @@ import (
 func (s *Server) handleHostInfo(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
-	hostname, _ := os.Hostname()
+	hostname := ""
+	if s.cfg != nil && s.cfg.NodeName != "" {
+		hostname = s.cfg.NodeName
+	} else {
+		hostname, _ = os.Hostname()
+	}
 	hostInfo := model.HostInfo{
 		Hostname:        hostname,
 		OS:              runtime.GOOS,
