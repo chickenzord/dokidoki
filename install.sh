@@ -54,8 +54,17 @@ ENABLE_MDNS="${DOKIDOKI_ENABLE_MDNS:-true}"
 IMAGE="${DOKIDOKI_IMAGE:-ghcr.io/chickenzord/dokidoki:latest}"
 DOCKER_SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
 
-INTERACTIVE=false
+INTERACTIVE=true
 NON_INTERACTIVE=false
+
+# Auto-detect headless or non-interactive environments
+if [ "${CI:-}" = "true" ] || [ "${DEBIAN_FRONTEND:-}" = "noninteractive" ]; then
+  INTERACTIVE=false
+  NON_INTERACTIVE=true
+elif [ ! -t 0 ] && [ ! -c /dev/tty ]; then
+  INTERACTIVE=false
+  NON_INTERACTIVE=true
+fi
 
 show_help() {
   cat << EOF
@@ -66,14 +75,14 @@ USAGE:
   ./install.sh [OPTIONS]
 
 OPTIONS:
-  -i, --interactive            Interactively prompt and configure settings
-  -y, --yes, --non-interactive Non-interactive mode (proceed without confirmation)
+  -i, --interactive            Interactively prompt and configure settings (default)
+  -y, --yes, --non-interactive Non-interactive mode (proceed with defaults without prompting)
   -s, --stacks-dir <dir>       Directory for Compose stacks (default: /opt/stacks)
   -p, --port <port>            Host port to expose Dokidoki on (default: 8080)
   -n, --node-name <name>       Node name for the cluster (default: current hostname '${CURRENT_HOSTNAME}')
       --peers <urls>           Comma-separated bootstrap seed peer URLs
       --token <token>          Cluster security token for authorized peering
-      --advertise-addr <urls>  Comma-separated candidate addresses to advertise
+      --advertise-addr <urls>  Comma-separated candidate addresses to advertise (default: auto-detected host IP)
       --disable-mdns           Disable LAN mDNS discovery (default: enabled)
       --image <image>          Dokidoki container image (default: ghcr.io/chickenzord/dokidoki:latest)
       --socket <path>          Path to Docker socket (default: /var/run/docker.sock)
@@ -91,10 +100,12 @@ while [[ $# -gt 0 ]]; do
   case "$1" in
     -i|--interactive)
       INTERACTIVE=true
+      NON_INTERACTIVE=false
       shift
       ;;
     -y|--yes|--non-interactive)
       NON_INTERACTIVE=true
+      INTERACTIVE=false
       shift
       ;;
     -s|--stacks-dir)
@@ -199,6 +210,65 @@ prompt_confirm() {
   esac
 }
 
+# Helper: detect host candidate IPs and default gateway interface
+detect_network_interfaces() {
+  DEFAULT_IFACE=""
+  DEFAULT_IP=""
+  AVAILABLE_IPS=()
+
+  if command -v ip >/dev/null 2>&1; then
+    # 1. Determine primary interface with default route
+    DEFAULT_IFACE="$((ip -4 route show default 2>/dev/null || true) | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')"
+    if [ -z "$DEFAULT_IFACE" ]; then
+      DEFAULT_IFACE="$((ip -4 route get 1.1.1.1 2>/dev/null || true) | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')"
+    fi
+    if [ -z "$DEFAULT_IFACE" ]; then
+      DEFAULT_IFACE="$((ip -4 route 2>/dev/null || true) | grep -E "proto kernel scope link src|scope link" | awk '{for(i=1;i<=NF;i++) if($i=="dev") print $(i+1); exit}')"
+    fi
+
+    # 2. Extract active global IPv4 addresses excluding loopback and virtual/docker interfaces
+    while IFS= read -r line; do
+      [ -z "$line" ] && continue
+      local iface ip
+      iface="$(echo "$line" | awk '{print $2}')"
+      ip="$(echo "$line" | awk '{print $4}' | cut -d/ -f1)"
+
+      # Filter out loopback, docker bridges, and virtual ethernet
+      case "$iface" in
+        lo*|docker*|br-*|veth*|virbr*|cni*|flannel*) continue ;;
+      esac
+
+      if [ -n "$ip" ]; then
+        AVAILABLE_IPS+=("$iface:$ip")
+        if [ "$iface" = "$DEFAULT_IFACE" ] && [ -z "$DEFAULT_IP" ]; then
+          DEFAULT_IP="$ip"
+        fi
+      fi
+    done < <(ip -o -4 addr show scope global 2>/dev/null || true)
+  elif command -v ifconfig >/dev/null 2>&1; then
+    local cur_iface=""
+    while IFS= read -r line; do
+      if [[ "$line" =~ ^([a-zA-Z0-9_-]+): ]]; then
+        cur_iface="${BASH_REMATCH[1]}"
+      elif [[ "$line" =~ inet[[:space:]]+([0-9]+\.[0-9]+\.[0-9]+\.[0-9]+) ]]; then
+        local ip="${BASH_REMATCH[1]}"
+        case "$cur_iface" in
+          lo*|docker*|br-*|veth*|virbr*) continue ;;
+        esac
+        if [ "$ip" != "127.0.0.1" ]; then
+          AVAILABLE_IPS+=("$cur_iface:$ip")
+        fi
+      fi
+    done < <(ifconfig 2>/dev/null || true)
+  fi
+
+  # Fallback if no default IP matched the default interface
+  if [ -z "$DEFAULT_IP" ] && [ ${#AVAILABLE_IPS[@]} -gt 0 ]; then
+    DEFAULT_IP="${AVAILABLE_IPS[0]#*:}"
+  fi
+  DEFAULT_IP="${DEFAULT_IP:-127.0.0.1}"
+}
+
 print_summary() {
   local masked_token="[disabled / open]"
   if [ -n "$CLUSTER_TOKEN" ]; then
@@ -212,12 +282,17 @@ print_summary() {
   if [ "$ENABLE_MDNS" = "false" ]; then
     mdns_display="disabled"
   fi
+  local advertise_display="[none]"
+  if [ -n "$ADVERTISE_ADDR" ]; then
+    advertise_display="$ADVERTISE_ADDR"
+  fi
 
   echo ""
   printf "${BOLD}Configuration Summary:${RESET}\n"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Stacks Directory" "$STACKS_DIR"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Host Port" "$PORT"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Node Name" "$NODE_NAME"
+  printf "  ${CYAN}%-18s${RESET}: %s\n" "Advertised Addr" "$advertise_display"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Docker Socket" "$DOCKER_SOCKET"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Container Image" "$IMAGE"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Cluster Token" "$masked_token"
@@ -255,14 +330,42 @@ fi
 
 success "Prerequisites satisfied ($COMPOSE_CMD detected)"
 
-# Interactive configuration prompts if requested
-if [ "$INTERACTIVE" = true ]; then
+# Detect network interfaces
+detect_network_interfaces
+
+# Interactive configuration prompts if enabled
+if [ "$INTERACTIVE" = true ] && [ "$NON_INTERACTIVE" = false ]; then
   info "Interactive Configuration Setup:"
   STACKS_DIR="$(prompt_input "Stacks Directory" "$STACKS_DIR")"
   PORT="$(prompt_input "Host Port" "$PORT")"
   NODE_NAME="$(prompt_input "Node Name" "$NODE_NAME")"
+
+  echo ""
+  printf "${BOLD}Detected Network Interfaces:${RESET}\n"
+  if [ ${#AVAILABLE_IPS[@]} -gt 0 ]; then
+    for entry in "${AVAILABLE_IPS[@]}"; do
+      dev="${entry%%:*}"
+      ip="${entry#*:}"
+      if [ "$ip" = "$DEFAULT_IP" ]; then
+        printf "  - ${CYAN}%-12s${RESET} %s ${GREEN}(recommended / default route)${RESET}\n" "$dev" "$ip"
+      else
+        printf "  - ${CYAN}%-12s${RESET} %s\n" "$dev" "$ip"
+      fi
+    done
+  else
+    printf "  ${DIM}(No active global IPv4 interfaces detected, fallback to %s)${RESET}\n" "$DEFAULT_IP"
+  fi
+  echo ""
+
+  SUGGESTED_ADVERTISE="${ADVERTISE_ADDR:-http://${DEFAULT_IP}:${PORT}}"
+  ADVERTISE_ADDR="$(prompt_input "Advertised Address (reachable by peers)" "$SUGGESTED_ADVERTISE")"
   CLUSTER_TOKEN="$(prompt_input "Cluster Security Token (optional)" "$CLUSTER_TOKEN")"
   PEERS="$(prompt_input "Seed Peers (comma-separated, optional)" "$PEERS")"
+else
+  # In non-interactive mode, set default advertise address if not explicitly specified
+  if [ -z "$ADVERTISE_ADDR" ]; then
+    ADVERTISE_ADDR="http://${DEFAULT_IP}:${PORT}"
+  fi
 fi
 
 # Print configuration summary before making actual changes
@@ -361,13 +464,13 @@ else
   warn "Dokidoki was started, but health check has not yet responded on port ${PORT}."
 fi
 
-# Auto-detect local IP address for summary
-DETECTED_IP="$(ip route get 1.1.1.1 2>/dev/null | awk '{print $7; exit}' || echo "localhost")"
-
 echo "-------------------------------------------------------------"
 printf "${BOLD}Dokidoki Stack Summary:${RESET}\n"
-printf "  ${CYAN}Web Dashboard:${RESET}    http://%s:%s  (or http://localhost:%s)\n" "$DETECTED_IP" "$PORT" "$PORT"
+printf "  ${CYAN}Web Dashboard:${RESET}    http://%s:%s  (or http://localhost:%s)\n" "${DEFAULT_IP:-localhost}" "$PORT" "$PORT"
 printf "  ${CYAN}Node Name:${RESET}        %s\n" "$NODE_NAME"
+if [ -n "$ADVERTISE_ADDR" ]; then
+  printf "  ${CYAN}Advertised Addr:${RESET}  %s\n" "$ADVERTISE_ADDR"
+fi
 printf "  ${CYAN}Stack Path:${RESET}       %s\n" "$COMPOSE_FILE"
 printf "  ${CYAN}Stacks Directory:${RESET} %s\n" "$STACKS_DIR"
 echo "-------------------------------------------------------------"

@@ -8,32 +8,34 @@ Dokidoki monitors Docker Compose stacks on your hosts (`/opt/stacks`), connects 
 
 ## Quick Install
 
-Run the host installer to set up Dokidoki as a Docker Compose stack:
+Run the host installer to set up Dokidoki as a Docker Compose stack (interactive by default):
 
 ```bash
 curl -sSL https://raw.githubusercontent.com/chickenzord/dokidoki/main/install.sh | bash
 ```
 
-### Interactive Mode
+The installer detects your host network interfaces, recommends the default route IP as candidate advertise address for clustering, and prompts for configuration options before launching.
 
-To interactively configure the node name, port, stacks directory, and cluster tokens:
+### Unattended / Non-Interactive Install
+
+For automated scripts, CI/CD, or headless provisioning, proceed with defaults without interactive prompts using `-y`:
 
 ```bash
-curl -sSL https://raw.githubusercontent.com/chickenzord/dokidoki/main/install.sh | bash -s -- -i
+curl -sSL https://raw.githubusercontent.com/chickenzord/dokidoki/main/install.sh | bash -s -- -y
 ```
 
 ### Installer Options
 
 | Option | Flag | Default | Description |
 | :--- | :--- | :--- | :--- |
-| **Interactive** | `-i, --interactive` | `false` | Prompt and configure settings interactively |
-| **Non-Interactive** | `-y, --yes, --non-interactive` | `false` | Proceed without confirmation prompt |
+| **Interactive** | `-i, --interactive` | `true` | Interactively prompt and configure settings (default in terminal) |
+| **Non-Interactive** | `-y, --yes, --non-interactive` | `false` | Unattended mode (proceed with defaults/flags without prompts) |
 | **Stacks Directory** | `-s, --stacks-dir <dir>` | `/opt/stacks` | Directory where compose stacks reside |
 | **Port** | `-p, --port <port>` | `8080` | Host port to expose the Web UI and API |
 | **Node Name** | `-n, --node-name <name>` | `$(hostname)` | Identifier for this node in the cluster |
 | **Seed Peers** | `--peers <urls>` | _(none)_ | Comma-separated bootstrap peer URLs |
 | **Cluster Token** | `--token <token>` | _(open)_ | Shared authentication token for the cluster |
-| **Advertise Addr** | `--advertise-addr <urls>` | _(auto)_ | Specific candidate address(es) to broadcast |
+| **Advertise Addr** | `--advertise-addr <urls>` | _(auto host IP)_ | Candidate address(es) reachable by peer nodes |
 | **Disable mDNS** | `--disable-mdns` | `enabled` | Disable local network mDNS peer discovery |
 
 ---
