@@ -195,8 +195,26 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
         <TooltipProvider delayDuration={150}>
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
             {filteredStacks.map((stack) => {
-              const hasRunning = stack.rollup.running > 0;
-              const isAllRunning = stack.rollup.total > 0 && stack.rollup.running === stack.rollup.total;
+              const runningCount = stack.rollup.running;
+              const completedCount = stack.rollup.completed || 0;
+              const totalCount = stack.rollup.total;
+              const hasRunning = runningCount > 0;
+              const isAllHealthy = totalCount > 0 && (runningCount + completedCount) === totalCount;
+              const isAllCompleted = totalCount > 0 && completedCount === totalCount;
+
+              let statusColor = 'bg-slate-600';
+              let statusTitle = 'Stopped';
+              if (isAllHealthy) {
+                statusColor = 'bg-emerald-400';
+                statusTitle = isAllCompleted
+                  ? 'Completed'
+                  : completedCount > 0
+                  ? `Running (${completedCount} completed)`
+                  : 'Running';
+              } else if (hasRunning) {
+                statusColor = 'bg-amber-400';
+                statusTitle = 'Partially Running';
+              }
 
               return (
                 <div
@@ -206,14 +224,8 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
-                      className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                        isAllRunning
-                          ? 'bg-emerald-400'
-                          : hasRunning
-                          ? 'bg-amber-400'
-                          : 'bg-slate-600'
-                      }`}
-                      title={isAllRunning ? 'Running' : hasRunning ? 'Partially Running' : 'Stopped'}
+                      className={`w-2 h-2 rounded-full flex-shrink-0 ${statusColor}`}
+                      title={statusTitle}
                     />
                     <span className="font-medium text-sm text-slate-200 group-hover:text-white truncate">
                       {stack.name}

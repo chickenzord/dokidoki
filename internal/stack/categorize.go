@@ -65,6 +65,9 @@ func CalculateRollup(containers []docker.Container) Rollup {
 			rollup.Running++
 		case "exited":
 			rollup.Exited++
+			if isCleanExit(c) {
+				rollup.Completed++
+			}
 		case "restarting":
 			rollup.Restarting++
 		case "paused":
@@ -74,6 +77,14 @@ func CalculateRollup(containers []docker.Container) Rollup {
 		}
 	}
 	return rollup
+}
+
+func isCleanExit(c docker.Container) bool {
+	if c.ExitCode != nil && *c.ExitCode == 0 {
+		return true
+	}
+	lower := strings.ToLower(strings.TrimSpace(c.Status))
+	return strings.HasPrefix(lower, "exited (0)")
 }
 
 // extractServices returns a sorted slice of unique service names from containers.

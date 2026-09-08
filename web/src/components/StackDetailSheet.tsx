@@ -307,6 +307,26 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
               </div>
             )}
 
+            {/* Unmanaged Stack Informational Banner */}
+            {isExternal && (
+              <div className="mt-3 p-3 bg-slate-800/40 border border-slate-700/60 rounded-lg text-slate-300 text-xs flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2 text-slate-400 min-w-0">
+                  <AlertCircle className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                  <span className="truncate">
+                    Unmanaged stack. Compose operations are disabled until imported.
+                  </span>
+                </div>
+                <Button
+                  size="sm"
+                  onClick={() => setImportDialogOpen(true)}
+                  className="h-6 px-2.5 text-xs bg-rose-600 hover:bg-rose-500 text-white font-medium flex-shrink-0"
+                >
+                  <Download className="w-3 h-3 mr-1" />
+                  Import
+                </Button>
+              </div>
+            )}
+
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
               <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1">
                 <Server className="w-3 h-3 text-slate-400" />
@@ -318,6 +338,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 className="bg-slate-800 text-slate-300 border-slate-700 font-mono text-[11px]"
               >
                 {stack.rollup.running}/{stack.rollup.total} running
+                {stack.rollup.completed ? ` · ${stack.rollup.completed} completed` : ''}
               </Badge>
 
               {stack.is_self && (
@@ -343,7 +364,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={handleComposeUp}
-                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+                disabled={isExternal}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <Play className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
                 Up
@@ -353,7 +376,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={() => handleComposeRestart()}
-                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+                disabled={isExternal}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
                 Restart
@@ -363,7 +388,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={handleComposePull}
-                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+                disabled={isExternal}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
                 Pull
@@ -373,7 +400,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={handleComposeDown}
-                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+                disabled={isExternal}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
+                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
                 Down
@@ -405,6 +434,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                   <div className="divide-y divide-slate-800/80">
                     {containers.map((container) => {
                       const isRunning = container.state === 'running';
+                      const isCompleted =
+                        container.state === 'exited' &&
+                        (container.exit_code === 0 || container.status?.toLowerCase().startsWith('exited (0)'));
                       const cleanName = container.name.replace(/^\//, '');
 
                       return (
@@ -416,8 +448,13 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                           <div className="flex items-center gap-3 min-w-0">
                             <span
                               className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                                isRunning ? 'bg-emerald-400 ring-2 ring-emerald-400/20' : 'bg-slate-500'
+                                isRunning
+                                  ? 'bg-emerald-400 ring-2 ring-emerald-400/20'
+                                  : isCompleted
+                                  ? 'bg-blue-400 ring-2 ring-blue-400/20'
+                                  : 'bg-slate-500'
                               }`}
+                              title={isRunning ? 'Running' : isCompleted ? 'Completed (Exit 0)' : container.state}
                             />
                             <div className="min-w-0">
                               <div className="text-xs font-semibold text-slate-200 group-hover:text-white flex items-center gap-1.5 truncate">
@@ -425,6 +462,11 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                                 {container.service && (
                                   <span className="text-[10px] px-1.5 py-0.2 rounded bg-slate-800 text-slate-400 border border-slate-700/60 font-mono">
                                     {container.service}
+                                  </span>
+                                )}
+                                {isCompleted && (
+                                  <span className="text-[10px] px-1.5 py-0.2 rounded bg-blue-950/40 text-blue-300 border border-blue-800/50 font-mono">
+                                    completed
                                   </span>
                                 )}
                               </div>
@@ -453,7 +495,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                               </div>
                             )}
 
-                            {container.service && (
+                            {container.service && !isExternal && (
                               <Button
                                 size="icon"
                                 variant="ghost"

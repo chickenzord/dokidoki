@@ -77,6 +77,11 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
 
   const cleanName = container.name.replace(/^\//, '');
   const isRunning = container.state === 'running';
+  const isCompleted =
+    container.state === 'exited' &&
+    (container.exit_code === 0 ||
+      container.status?.toLowerCase().startsWith('exited (0)') ||
+      inspectData?.State?.ExitCode === 0);
 
   const composeProjectLabel =
     container.labels?.['com.docker.compose.project'] ||
@@ -245,10 +250,12 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                 className={`text-[11px] font-mono capitalize ${
                   isRunning
                     ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/60'
+                    : isCompleted
+                    ? 'bg-blue-950/40 text-blue-300 border-blue-800/60'
                     : 'bg-slate-800 text-slate-400 border-slate-700'
                 }`}
               >
-                {container.state}
+                {isCompleted ? 'Completed (Exit 0)' : container.state}
               </Badge>
 
               {container.is_self && (

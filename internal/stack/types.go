@@ -33,6 +33,7 @@ type DiscoveredStack = Discovered
 type Rollup struct {
 	Running    int `json:"running"`
 	Exited     int `json:"exited"`
+	Completed  int `json:"completed"`
 	Restarting int `json:"restarting"`
 	Paused     int `json:"paused"`
 	Dead       int `json:"dead"`

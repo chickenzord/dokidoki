@@ -51,6 +51,21 @@ func TestCalculateRollup(t *testing.T) {
 				Total:      8,
 			},
 		},
+		{
+			name: "completed init container with exit code 0",
+			containers: []docker.Container{
+				{State: "running"},
+				{State: "running"},
+				{State: "exited", Status: "Exited (0) 4 minutes ago"},
+				{State: "exited", Status: "Exited (1) 2 minutes ago"},
+			},
+			expected: Rollup{
+				Running:   2,
+				Exited:    2,
+				Completed: 1,
+				Total:     4,
+			},
+		},
 	}
 
 	for _, tt := range tests {

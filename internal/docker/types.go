@@ -10,17 +10,18 @@ type PortMapping struct {
 
 // Container represents container metadata normalized for Dokidoki.
 type Container struct {
-	ID      string            `json:"id"`
-	Name    string            `json:"name"`
-	Image   string            `json:"image"`
-	State   string            `json:"state"`
-	Status  string            `json:"status"`
-	Created int64             `json:"created"`
-	Ports   []PortMapping     `json:"ports"`
-	Labels  map[string]string `json:"labels"`
-	Stack   string            `json:"stack,omitempty"`
-	Service string            `json:"service,omitempty"`
-	IsSelf  bool              `json:"is_self"`
+	ID       string            `json:"id"`
+	Name     string            `json:"name"`
+	Image    string            `json:"image"`
+	State    string            `json:"state"`
+	Status   string            `json:"status"`
+	Created  int64             `json:"created"`
+	Ports    []PortMapping     `json:"ports"`
+	Labels   map[string]string `json:"labels"`
+	Stack    string            `json:"stack,omitempty"`
+	Service  string            `json:"service,omitempty"`
+	IsSelf   bool              `json:"is_self"`
+	ExitCode *int              `json:"exit_code,omitempty"`
 }
 
 // HostInfo provides Docker engine and daemon runtime details.

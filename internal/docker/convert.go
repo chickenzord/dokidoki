@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"strconv"
 	"strings"
 
 	"github.com/docker/docker/api/types"
@@ -63,19 +64,42 @@ func ConvertContainer(c types.Container, selfContainerID string) Container {
 		labels[k] = v
 	}
 
-	return Container{
-		ID:      c.ID,
-		Name:    name,
-		Image:   c.Image,
-		State:   c.State,
-		Status:  c.Status,
-		Created: c.Created,
-		Ports:   ports,
-		Labels:  labels,
-		Stack:   stack,
-		Service: service,
-		IsSelf:  IsSelfContainer(c.ID, selfContainerID),
+	var exitCode *int
+	if code, ok := ParseExitCode(c.Status); ok {
+		exitCode = &code
 	}
+
+	return Container{
+		ID:       c.ID,
+		Name:     name,
+		Image:    c.Image,
+		State:    c.State,
+		Status:   c.Status,
+		Created:  c.Created,
+		Ports:    ports,
+		Labels:   labels,
+		Stack:    stack,
+		Service:  service,
+		IsSelf:   IsSelfContainer(c.ID, selfContainerID),
+		ExitCode: exitCode,
+	}
+}
+
+// ParseExitCode extracts the exit code from Docker status string (e.g., "Exited (0) 4 minutes ago").
+func ParseExitCode(status string) (int, bool) {
+	lower := strings.ToLower(strings.TrimSpace(status))
+	if !strings.HasPrefix(lower, "exited (") {
+		return 0, false
+	}
+	start := strings.Index(lower, "(")
+	end := strings.Index(lower, ")")
+	if start != -1 && end != -1 && end > start+1 {
+		codeStr := lower[start+1 : end]
+		if code, err := strconv.Atoi(codeStr); err == nil {
+			return code, true
+		}
+	}
+	return 0, false
 }
 
 // ConvertContainers converts a slice of raw Docker types.Container to []Container.

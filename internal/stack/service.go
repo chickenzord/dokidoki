@@ -989,6 +989,10 @@ func (s *Service) resolveComposeFile(ctx context.Context, name string) (string, 
 		return "", ErrNotFound
 	}
 
+	if detail.Source == string(SourceExternal) {
+		return "", errors.New("compose operations are not permitted on unmanaged stacks; import the stack into Dokidoki first")
+	}
+
 	if !detail.ComposePresent || detail.ComposePath == "" {
 		return "", ErrComposeNotFound
 	}

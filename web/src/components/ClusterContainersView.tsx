@@ -211,6 +211,9 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                 const cleanName = container.name.replace(/^\//, '');
                 const isRunning = container.state === 'running';
                 const isPaused = container.state === 'paused';
+                const isCompleted =
+                  container.state === 'exited' &&
+                  (container.exit_code === 0 || container.status?.toLowerCase().startsWith('exited (0)'));
                 const isStandalone = !container.stack;
 
                 return (
@@ -225,10 +228,13 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                           className={`w-2 h-2 rounded-full flex-shrink-0 ${
                             isRunning
                               ? 'bg-emerald-400 ring-2 ring-emerald-400/20'
+                              : isCompleted
+                              ? 'bg-blue-400 ring-2 ring-blue-400/20'
                               : isPaused
                               ? 'bg-amber-400'
                               : 'bg-slate-600'
                           }`}
+                          title={isRunning ? 'Running' : isCompleted ? 'Completed (Exit 0)' : isPaused ? 'Paused' : 'Stopped'}
                         />
                         <div>
                           <div className="font-semibold text-slate-100 group-hover:text-white">
@@ -254,12 +260,14 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                         className={`text-[10px] capitalize font-mono ${
                           isRunning
                             ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/60'
+                            : isCompleted
+                            ? 'bg-blue-950/40 text-blue-300 border-blue-800/60'
                             : isPaused
                             ? 'bg-amber-950/40 text-amber-400 border-amber-800/60'
                             : 'bg-slate-900 text-slate-400 border-slate-800'
                         }`}
                       >
-                        {container.state}
+                        {isCompleted ? 'completed (0)' : container.state}
                       </Badge>
                     </td>
 

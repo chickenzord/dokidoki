@@ -13,6 +13,7 @@ export interface Node {
 export interface ContainerRollup {
   running: number;
   exited: number;
+  completed?: number;
   restarting: number;
   paused: number;
   dead: number;
@@ -53,6 +54,7 @@ export interface ContainerSummary {
   stack?: string;
   service?: string;
   is_self?: boolean;
+  exit_code?: number;
 }
 
 export interface ClusterStack extends StackSummary {
