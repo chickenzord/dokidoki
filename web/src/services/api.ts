@@ -3,6 +3,7 @@ import {
   Node,
   PingResponse,
   StackSummary,
+  StackDetail,
   ContainerSummary,
   StackFile,
   StackFilesResponse,
@@ -156,6 +157,10 @@ class ApiService {
   public async getStacks(customEndpoint?: string, source?: string, options?: RequestOptions): Promise<StackSummary[]> {
     const query = source && source !== 'all' ? `?source=${encodeURIComponent(source)}` : '';
     return this.request<StackSummary[]>(`/api/v1/stacks${query}`, { method: 'GET', ...options }, customEndpoint);
+  }
+
+  public async getStack(name: string, customEndpoint?: string, options?: RequestOptions): Promise<StackDetail> {
+    return this.request<StackDetail>(`/api/v1/stacks/${encodeURIComponent(name)}`, { method: 'GET', ...options }, customEndpoint);
   }
 
   public async getContainers(customEndpoint?: string, stack?: string, options?: RequestOptions): Promise<ContainerSummary[]> {

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ClusterStack, StackFilesResponse } from '../types';
-import { useStackFilesQuery, useStackContainersQuery } from '../hooks/useClusterData';
+import { ClusterStack, StackFilesResponse, ContainerSummary } from '../types';
+import { useStackFilesQuery, useStackContainersQuery, useStackDetailQuery } from '../hooks/useClusterData';
 import { api } from '../services/api';
 import {
   Sheet,
@@ -36,14 +36,16 @@ interface StackDetailSheetProps {
   stack: ClusterStack | null;
   isOpen: boolean;
   onClose: () => void;
-  onSelectContainer?: (containerId: string, hostEndpoint: string) => void;
+  onSelectContainer?: (containerId: string, hostEndpoint: string, container?: ContainerSummary) => void;
+  onStackUpdated?: (stack: ClusterStack) => void;
 }
 
 export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
-  stack,
+  stack: initialStack,
   isOpen,
   onClose,
   onSelectContainer,
+  onStackUpdated,
 }) => {
   const queryClient = useQueryClient();
   const [importDialogOpen, setImportDialogOpen] = useState(false);
@@ -58,8 +60,23 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const [logError, setLogError] = useState<string | null>(null);
   const [logSuccess, setLogSuccess] = useState(false);
 
-  const hostEndpoint = stack?.hostEndpoint || '';
-  const stackName = stack?.name || '';
+  const hostEndpoint = initialStack?.hostEndpoint || '';
+  const stackName = initialStack?.name || '';
+
+  // Query live stack detail to keep modal in sync when operations finish
+  const { data: stackDetail } = useStackDetailQuery(
+    hostEndpoint,
+    stackName,
+    isOpen && Boolean(stackName)
+  );
+
+  const stack: ClusterStack | null = initialStack
+    ? {
+        ...initialStack,
+        ...(stackDetail ? stackDetail : {}),
+      }
+    : null;
+
   const isExternal = stack?.source === 'external';
 
   // For managed stacks: fetch files on mount
@@ -119,6 +136,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const invalidateStackData = () => {
     queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
     queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
+    queryClient.invalidateQueries({ queryKey: ['stack-detail', hostEndpoint, stackName] });
     queryClient.invalidateQueries({ queryKey: ['stack-containers', hostEndpoint, stackName] });
     queryClient.invalidateQueries({ queryKey: ['stack-files', hostEndpoint, stackName] });
   };
@@ -284,7 +302,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
                 <div className="leading-relaxed">
                   <span className="font-semibold text-amber-200">Import Pending: </span>
-                  This stack was imported into Dokidoki, but its containers are still running from the external directory. Click &apos;Up&apos; or &apos;Restart&apos; to redeploy containers under Dokidoki management.
+                  This stack was imported into Dokidoki, but its containers are still running from the external directory. Click &apos;Up&apos; to redeploy containers under Dokidoki management.
                 </div>
               </div>
             )}
@@ -392,7 +410,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                       return (
                         <div
                           key={container.id}
-                          onClick={() => onSelectContainer?.(container.id, stack.hostEndpoint)}
+                          onClick={() => onSelectContainer?.(container.id, stack.hostEndpoint, container)}
                           className="flex items-center justify-between p-3 hover:bg-slate-800/50 cursor-pointer transition-colors group"
                         >
                           <div className="flex items-center gap-3 min-w-0">
@@ -607,14 +625,33 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
 
       <ImportStackDialog
         isOpen={importDialogOpen}
-        onClose={() => setImportDialogOpen(false)}
+        onClose={() => {
+          setImportDialogOpen(false);
+          invalidateStackData();
+        }}
+        onImportSuccess={(createdSummary) => {
+          invalidateStackData();
+          if (onStackUpdated && stack) {
+            onStackUpdated({
+              ...stack,
+              ...createdSummary,
+              source: 'managed',
+              pending_import: true,
+            });
+          }
+        }}
         stack={stack}
         loadedFiles={files}
       />
 
       <OperationLogModal
         isOpen={logModalOpen}
-        onClose={() => setLogModalOpen(false)}
+        onClose={() => {
+          setLogModalOpen(false);
+          if (logSuccess) {
+            invalidateStackData();
+          }
+        }}
         title={logTitle}
         subtitle={logSubtitle}
         output={logOutput}

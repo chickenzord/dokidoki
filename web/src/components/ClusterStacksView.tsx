@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { ClusterStack, ClusterContainer } from '../types';
 import { useClusterStacksQuery } from '../hooks/useClusterData';
 import { StackDetailSheet } from './StackDetailSheet';
@@ -38,6 +38,24 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
   const [selectedContainer, setSelectedContainer] = useState<ClusterContainer | null>(null);
 
   const { data: stacks = [], isLoading, error } = useClusterStacksQuery(selectedHostId);
+
+  // Keep selectedStack in sync when stacks query refetches
+  useEffect(() => {
+    if (selectedStack) {
+      const updated = stacks.find(
+        (s) => s.hostId === selectedStack.hostId && s.name === selectedStack.name
+      );
+      if (
+        updated &&
+        (updated.source !== selectedStack.source ||
+          updated.pending_import !== selectedStack.pending_import ||
+          updated.rollup.running !== selectedStack.rollup.running ||
+          updated.rollup.total !== selectedStack.rollup.total)
+      ) {
+        setSelectedStack(updated);
+      }
+    }
+  }, [stacks, selectedStack]);
 
   const activeSearch = (initialSearch || localSearch).trim().toLowerCase();
 
@@ -218,7 +236,7 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
                         <TooltipContent side="top" className="bg-slate-900 text-slate-200 border border-slate-700 max-w-xs text-xs p-2.5">
                           <p className="font-semibold text-amber-300">Import Pending</p>
                           <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
-                            Configuration imported, but containers are still running from the external directory. Run &apos;Up&apos; or &apos;Restart&apos; to redeploy.
+                            Configuration imported, but containers are still running from the external directory. Run &apos;Up&apos; to redeploy.
                           </p>
                         </TooltipContent>
                       </Tooltip>
@@ -258,22 +276,25 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
 
       {/* Slide-over Sheet for Stack Detail */}
       <StackDetailSheet
-        stack={selectedStack}
+        stack={stacks.find((s) => s.hostId === selectedStack?.hostId && s.name === selectedStack?.name) || selectedStack}
         isOpen={Boolean(selectedStack)}
         onClose={() => setSelectedStack(null)}
-        onSelectContainer={(containerId, hostEndpoint) => {
+        onStackUpdated={setSelectedStack}
+        onSelectContainer={(containerId, hostEndpoint, containerSummary) => {
           setSelectedContainer({
             id: containerId,
-            name: containerId.substring(0, 12),
-            image: '',
-            state: 'running',
-            status: '',
-            created: 0,
-            ports: [],
-            labels: {},
+            name: containerSummary?.name || containerId.substring(0, 12),
+            image: containerSummary?.image || '',
+            state: containerSummary?.state || 'running',
+            status: containerSummary?.status || '',
+            created: containerSummary?.created || 0,
+            ports: containerSummary?.ports || [],
+            labels: containerSummary?.labels || {},
             hostId: '',
             hostName: selectedStack?.hostName || '',
             hostEndpoint,
+            stack: selectedStack?.name || containerSummary?.stack,
+            service: containerSummary?.service,
           });
         }}
       />

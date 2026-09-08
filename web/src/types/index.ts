@@ -30,6 +30,10 @@ export interface StackSummary {
   pending_import?: boolean;
 }
 
+export interface StackDetail extends StackSummary {
+  containers: ContainerSummary[];
+}
+
 export interface PortMapping {
   ip?: string;
   privatePort: number;

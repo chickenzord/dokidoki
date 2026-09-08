@@ -77,7 +77,30 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
 
   const cleanName = container.name.replace(/^\//, '');
   const isRunning = container.state === 'running';
-  const isStandalone = !container.stack;
+
+  const composeProjectLabel =
+    container.labels?.['com.docker.compose.project'] ||
+    inspectData?.Config?.Labels?.['com.docker.compose.project'];
+
+  const composeServiceLabel =
+    container.labels?.['com.docker.compose.service'] ||
+    inspectData?.Config?.Labels?.['com.docker.compose.service'];
+
+  const effectiveStackName =
+    container.stack ||
+    inspectData?.stack_name ||
+    composeProjectLabel ||
+    '';
+
+  const isPartOfStack =
+    Boolean(effectiveStackName) ||
+    Boolean(container.service) ||
+    Boolean(inspectData?.service_name) ||
+    Boolean(composeServiceLabel) ||
+    inspectData?.source === 'managed' ||
+    inspectData?.source === 'external';
+
+  const isStandalone = !isPartOfStack;
 
   const envVars = inspectData?.Config?.Env || [];
   const mounts = inspectData?.Mounts || [];
@@ -205,7 +228,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                 ) : (
                   <Badge variant="outline" className="text-xs bg-blue-950/40 text-blue-400 border-blue-800/60 font-mono flex items-center gap-1">
                     <Layers className="w-3 h-3" />
-                    {container.stack}
+                    {effectiveStackName || 'Stack'}
                   </Badge>
                 )}
               </div>

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ClusterStack, StackFile, CreateStackFile, CreateStackRequest } from '../types';
+import { ClusterStack, StackFile, CreateStackFile, CreateStackRequest, StackSummary } from '../types';
 import { useCreateStackMutation } from '../hooks/useClusterData';
 import {
   Dialog,
@@ -21,6 +21,7 @@ interface ImportStackDialogProps {
   onClose: () => void;
   stack: ClusterStack | null;
   loadedFiles?: StackFile[];
+  onImportSuccess?: (result: StackSummary) => void;
 }
 
 function formatBytes(bytes?: number): string {
@@ -34,6 +35,7 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
   onClose,
   stack,
   loadedFiles,
+  onImportSuccess,
 }) => {
   const queryClient = useQueryClient();
   const [stackName, setStackName] = useState('');
@@ -98,7 +100,7 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
     };
 
     try {
-      await createStackMutation.mutateAsync({
+      const created = await createStackMutation.mutateAsync({
         data: requestData,
         hostEndpoint: stack.hostEndpoint,
       });
@@ -107,6 +109,8 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
       queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
       queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
       queryClient.invalidateQueries({ queryKey: ['stack-files'] });
+      queryClient.invalidateQueries({ queryKey: ['stack-detail'] });
+      onImportSuccess?.(created);
 
       setTimeout(() => {
         onClose();

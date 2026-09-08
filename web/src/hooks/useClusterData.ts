@@ -3,6 +3,7 @@ import { api } from '../services/api';
 import {
   Node,
   ClusterStack,
+  StackDetail,
   ClusterContainer,
   CreateStackRequest,
   StackFilesResponse,
@@ -135,6 +136,15 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
     },
     enabled: !nodesLoading,
     refetchInterval: 10000,
+  });
+}
+
+export function useStackDetailQuery(hostEndpoint: string, stackName: string, enabled = true) {
+  return useQuery<StackDetail>({
+    queryKey: ['stack-detail', hostEndpoint, stackName],
+    queryFn: () => api.getStack(stackName, hostEndpoint),
+    enabled: Boolean(stackName) && enabled,
+    refetchInterval: 5000,
   });
 }
 
