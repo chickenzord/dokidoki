@@ -75,10 +75,16 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
 		r.Get("/stacks/{name}/files", s.handleGetStackFiles)
 		r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
-		r.Post("/stacks/{name}/up", s.handleComposeUp)
-		r.Post("/stacks/{name}/down", s.handleComposeDown)
-		r.Post("/stacks/{name}/restart", s.handleComposeRestart)
-		r.Post("/stacks/{name}/pull", s.handleComposePull)
+		// Long-running streaming operations (compose up/down/restart/pull, container pull)
+		r.Group(func(r chi.Router) {
+			r.Use(SlidingDeadlineMiddleware(DefaultStreamingIdleTimeout))
+
+			r.Post("/stacks/{name}/up", s.handleComposeUp)
+			r.Post("/stacks/{name}/down", s.handleComposeDown)
+			r.Post("/stacks/{name}/restart", s.handleComposeRestart)
+			r.Post("/stacks/{name}/pull", s.handleComposePull)
+			r.Post("/containers/{id}/pull", s.handlePullContainer)
+		})
 
 		// Containers routes
 		r.Get("/containers", s.handleListContainers)
@@ -87,7 +93,6 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/containers/{id}/restart", s.handleRestartContainer)
 		r.Post("/containers/{id}/start", s.handleStartContainer)
 		r.Post("/containers/{id}/stop", s.handleStopContainer)
-		r.Post("/containers/{id}/pull", s.handlePullContainer)
 
 		// Host routes
 		r.Get("/host", s.handleHostInfo)

@@ -9,7 +9,7 @@ import {
 } from './ui/dialog';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Terminal, Copy, Check, Loader2, CheckCircle2, XCircle } from 'lucide-react';
+import { Terminal, Copy, Check, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
 
 interface OperationLogModalProps {
   isOpen: boolean;
@@ -34,6 +34,20 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
 }) => {
   const [copied, setCopied] = useState(false);
   const logEndRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (!isRunning) return;
+
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      e.preventDefault();
+      e.returnValue = '';
+    };
+
+    window.addEventListener('beforeunload', handleBeforeUnload);
+    return () => {
+      window.removeEventListener('beforeunload', handleBeforeUnload);
+    };
+  }, [isRunning]);
 
   useEffect(() => {
     if (logEndRef.current) {
@@ -82,6 +96,15 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
         </DialogHeader>
 
         <div className="space-y-3">
+          {isRunning && (
+            <div className="p-2.5 bg-amber-950/30 border border-amber-800/50 rounded-lg text-amber-300 text-xs flex items-center gap-2">
+              <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+              <span>
+                Please keep this page open. Navigating away or closing the tab may interrupt the running process.
+              </span>
+            </div>
+          )}
+
           <div className="relative group">
             <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-xs text-slate-300 max-h-80 min-h-[140px] overflow-y-auto whitespace-pre-wrap break-all select-text leading-relaxed">
               {output ? (
