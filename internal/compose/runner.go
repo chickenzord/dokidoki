@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/creack/pty"
 )
@@ -109,6 +110,7 @@ func (r *CommandRunner) buildCommand(ctx context.Context, composePath string, ex
 
 	cmd := exec.CommandContext(ctx, cmdName, cmdArgs...)
 	cmd.Dir = filepath.Dir(composePath)
+	cmd.WaitDelay = 500 * time.Millisecond
 
 	env := os.Environ()
 	if r.dockerHost != "" {
