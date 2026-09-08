@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ClusterStack, StackFilesResponse, ContainerSummary, CreateStackFile } from '../types';
 import { useStackFilesQuery, useStackContainersQuery, useStackDetailQuery } from '../hooks/useClusterData';
 import { api } from '../services/api';
+import { getHostForContainer } from '../lib/utils';
 import {
   Sheet,
   SheetContent,
@@ -14,7 +15,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { ImportStackDialog } from './ImportStackDialog';
-import { OperationLogModal } from './OperationLogModal';
+import { OperationLogModal, OperationTask } from './OperationLogModal';
 import { CodeEditor } from './CodeEditor';
 import {
   Server,
@@ -38,6 +39,7 @@ import {
   X,
   Undo2,
   CheckCircle2,
+  ExternalLink,
 } from 'lucide-react';
 
 interface StackDetailSheetProps {
@@ -70,14 +72,8 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const [addingFile, setAddingFile] = useState(false);
   const [newFileName, setNewFileName] = useState('');
 
-  // Streaming log modal states
-  const [logModalOpen, setLogModalOpen] = useState(false);
-  const [logTitle, setLogTitle] = useState('');
-  const [logSubtitle, setLogSubtitle] = useState('');
-  const [logOutput, setLogOutput] = useState('');
-  const [logRunning, setLogRunning] = useState(false);
-  const [logError, setLogError] = useState<string | null>(null);
-  const [logSuccess, setLogSuccess] = useState(false);
+  // Streaming operation state (isolated in OperationLogModal to prevent re-rendering large sheet on log chunks)
+  const [activeOperation, setActiveOperation] = useState<OperationTask | null>(null);
 
   const hostEndpoint = initialStack?.hostEndpoint || '';
   const stackName = initialStack?.name || '';
@@ -352,34 +348,17 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     queryClient.invalidateQueries({ queryKey: ['stack-files', hostEndpoint, stackName] });
   };
 
-  const handleComposeUp = async () => {
+  const handleComposeUp = () => {
     if (!stack) return;
-    setLogTitle(`Compose Up: ${stack.name}`);
-    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose up -d --remove-orphans`);
-    setLogOutput('');
-    setLogError(null);
-    setLogSuccess(false);
-    setLogRunning(true);
-    setLogModalOpen(true);
-
-    try {
-      await api.composeUp(
-        stack.name,
-        (chunk) => {
-          setLogOutput((prev) => prev + chunk);
-        },
-        hostEndpoint
-      );
-      setLogSuccess(true);
-      invalidateStackData();
-    } catch (err: any) {
-      setLogError(err.message || 'Failed to run compose up');
-    } finally {
-      setLogRunning(false);
-    }
+    setActiveOperation({
+      title: `Compose Up: ${stack.name}`,
+      subtitle: `Host: ${stack.hostName} | Command: docker compose up -d --remove-orphans`,
+      action: (onChunk) => api.composeUp(stack.name, onChunk, hostEndpoint),
+      onSuccess: invalidateStackData,
+    });
   };
 
-  const handleComposeDown = async () => {
+  const handleComposeDown = () => {
     if (!stack) return;
     if (stack.is_self) {
       if (!window.confirm('Warning: This stack contains Dokidoki itself. Stopping it will shut down the server. Continue?')) {
@@ -391,32 +370,15 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
       }
     }
 
-    setLogTitle(`Compose Down: ${stack.name}`);
-    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose down`);
-    setLogOutput('');
-    setLogError(null);
-    setLogSuccess(false);
-    setLogRunning(true);
-    setLogModalOpen(true);
-
-    try {
-      await api.composeDown(
-        stack.name,
-        (chunk) => {
-          setLogOutput((prev) => prev + chunk);
-        },
-        hostEndpoint
-      );
-      setLogSuccess(true);
-      invalidateStackData();
-    } catch (err: any) {
-      setLogError(err.message || 'Failed to run compose down');
-    } finally {
-      setLogRunning(false);
-    }
+    setActiveOperation({
+      title: `Compose Down: ${stack.name}`,
+      subtitle: `Host: ${stack.hostName} | Command: docker compose down`,
+      action: (onChunk) => api.composeDown(stack.name, onChunk, hostEndpoint),
+      onSuccess: invalidateStackData,
+    });
   };
 
-  const handleComposeRestart = async (service?: string) => {
+  const handleComposeRestart = (service?: string) => {
     if (!stack) return;
     if (stack.is_self) {
       if (!window.confirm('Warning: This stack contains Dokidoki itself. Restarting it may interrupt your connection. Continue?')) {
@@ -425,57 +387,22 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     }
 
     const titleSuffix = service ? ` (service: ${service})` : '';
-    setLogTitle(`Compose Restart: ${stack.name}${titleSuffix}`);
-    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose restart ${service || ''}`.trim());
-    setLogOutput('');
-    setLogError(null);
-    setLogSuccess(false);
-    setLogRunning(true);
-    setLogModalOpen(true);
-
-    try {
-      await api.composeRestart(
-        stack.name,
-        service,
-        (chunk) => {
-          setLogOutput((prev) => prev + chunk);
-        },
-        hostEndpoint
-      );
-      setLogSuccess(true);
-      invalidateStackData();
-    } catch (err: any) {
-      setLogError(err.message || 'Failed to restart compose stack');
-    } finally {
-      setLogRunning(false);
-    }
+    setActiveOperation({
+      title: `Compose Restart: ${stack.name}${titleSuffix}`,
+      subtitle: `Host: ${stack.hostName} | Command: docker compose restart ${service || ''}`.trim(),
+      action: (onChunk) => api.composeRestart(stack.name, service, onChunk, hostEndpoint),
+      onSuccess: invalidateStackData,
+    });
   };
 
-  const handleComposePull = async () => {
+  const handleComposePull = () => {
     if (!stack) return;
-    setLogTitle(`Compose Pull: ${stack.name}`);
-    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose pull`);
-    setLogOutput('');
-    setLogError(null);
-    setLogSuccess(false);
-    setLogRunning(true);
-    setLogModalOpen(true);
-
-    try {
-      await api.composePull(
-        stack.name,
-        (chunk) => {
-          setLogOutput((prev) => prev + chunk);
-        },
-        hostEndpoint
-      );
-      setLogSuccess(true);
-      invalidateStackData();
-    } catch (err: any) {
-      setLogError(err.message || 'Failed to pull compose images');
-    } finally {
-      setLogRunning(false);
-    }
+    setActiveOperation({
+      title: `Compose Pull: ${stack.name}`,
+      subtitle: `Host: ${stack.hostName} | Command: docker compose pull`,
+      action: (onChunk) => api.composePull(stack.name, onChunk, hostEndpoint),
+      onSuccess: invalidateStackData,
+    });
   };
 
   if (!stack) return null;
@@ -719,16 +646,35 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                           <div className="flex items-center gap-2 flex-shrink-0 pl-2">
                             {container.ports && container.ports.length > 0 && (
                               <div className="hidden sm:flex items-center gap-1">
-                                {container.ports.slice(0, 2).map((p, idx) => (
-                                  <span
-                                    key={idx}
-                                    className="text-[10px] font-mono px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-300 border border-slate-700/50"
-                                  >
-                                    {p.publicPort ? `${p.publicPort}:${p.privatePort}` : p.privatePort}
-                                  </span>
-                                ))}
+                                {container.ports.slice(0, 2).map((p, idx) => {
+                                  if (p.publicPort) {
+                                    const targetHost = getHostForContainer(hostEndpoint);
+                                    return (
+                                      <a
+                                        key={idx}
+                                        href={`http://${targetHost}:${p.publicPort}`}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        onClick={(e) => e.stopPropagation()}
+                                        title={`Open service at http://${targetHost}:${p.publicPort}`}
+                                        className="inline-flex items-center text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-300 border border-slate-700/50 hover:text-rose-400 hover:border-rose-500/40 hover:bg-slate-700/80 transition-colors"
+                                      >
+                                        <span>{p.publicPort}:{p.privatePort}</span>
+                                        <ExternalLink className="w-2.5 h-2.5 ml-1 opacity-70" />
+                                      </a>
+                                    );
+                                  }
+                                  return (
+                                    <span
+                                      key={idx}
+                                      className="text-[10px] font-mono tabular-nums px-1.5 py-0.5 rounded bg-slate-800/80 text-slate-300 border border-slate-700/50"
+                                    >
+                                      {p.privatePort}
+                                    </span>
+                                  );
+                                })}
                                 {container.ports.length > 2 && (
-                                  <span className="text-[10px] text-slate-500 font-mono">
+                                  <span className="text-[10px] text-slate-500 font-mono tabular-nums">
                                     +{container.ports.length - 2}
                                   </span>
                                 )}
@@ -1187,19 +1133,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
       />
 
       <OperationLogModal
-        isOpen={logModalOpen}
-        onClose={() => {
-          setLogModalOpen(false);
-          if (logSuccess) {
-            invalidateStackData();
-          }
-        }}
-        title={logTitle}
-        subtitle={logSubtitle}
-        output={logOutput}
-        isRunning={logRunning}
-        error={logError}
-        success={logSuccess}
+        isOpen={Boolean(activeOperation)}
+        onClose={() => setActiveOperation(null)}
+        operation={activeOperation}
       />
     </>
   );

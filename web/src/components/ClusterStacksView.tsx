@@ -1,5 +1,5 @@
-import React, { useState, useEffect } from 'react';
-import { ClusterStack, ClusterContainer } from '../types';
+import React, { useState, useMemo, useDeferredValue } from 'react';
+import { ClusterContainer } from '../types';
 import { useClusterStacksQuery } from '../hooks/useClusterData';
 import { StackDetailSheet } from './StackDetailSheet';
 import { ContainerDetailSheet } from './ContainerDetailSheet';
@@ -8,10 +8,12 @@ import { Input } from './ui/input';
 import {
   Layers,
   Search,
+  Server,
   AlertCircle,
   AlertTriangle,
   HelpCircle,
   Loader2,
+  X,
 } from 'lucide-react';
 import {
   Tooltip,
@@ -32,61 +34,99 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
   const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'running'>('all');
   const [localSearch, setLocalSearch] = useState('');
-  const [selectedStack, setSelectedStack] = useState<ClusterStack | null>(null);
+  const [selectedStackKey, setSelectedStackKey] = useState<{ hostId: string; name: string } | null>(null);
+  const [dismissedUnreachable, setDismissedUnreachable] = useState(false);
 
   // For opening a container from the stack sheet
   const [selectedContainer, setSelectedContainer] = useState<ClusterContainer | null>(null);
 
-  const { data: stacks = [], isLoading, error } = useClusterStacksQuery(selectedHostId);
+  const { data, isLoading, error } = useClusterStacksQuery(selectedHostId);
+  const stacks = data?.items ?? [];
+  const unreachableNodes = data?.unreachableNodes ?? [];
 
-  // Keep selectedStack in sync when stacks query refetches
-  useEffect(() => {
-    if (selectedStack) {
-      const updated = stacks.find(
-        (s) => s.hostId === selectedStack.hostId && s.name === selectedStack.name
-      );
-      if (
-        updated &&
-        (updated.source !== selectedStack.source ||
-          updated.pending_import !== selectedStack.pending_import ||
-          updated.rollup.running !== selectedStack.rollup.running ||
-          updated.rollup.total !== selectedStack.rollup.total)
-      ) {
-        setSelectedStack(updated);
-      }
-    }
-  }, [stacks, selectedStack]);
+  // Derive selectedStack from stacks query data without useEffect syncing
+  const selectedStack = useMemo(() => {
+    if (!selectedStackKey) return null;
+    return stacks.find(
+      (s) => s.hostId === selectedStackKey.hostId && s.name === selectedStackKey.name
+    ) ?? null;
+  }, [stacks, selectedStackKey]);
 
-  const activeSearch = (initialSearch || localSearch).trim().toLowerCase();
+  const rawSearch = initialSearch || localSearch;
+  const deferredSearch = useDeferredValue(rawSearch);
+  const activeSearch = deferredSearch.trim().toLowerCase();
 
-  const filteredStacks = stacks.filter((stack) => {
-    // Source filter
-    if (sourceFilter !== 'all' && stack.source !== sourceFilter) {
-      return false;
-    }
-
-    // Status filter
-    if (statusFilter === 'running' && stack.rollup.running === 0) {
-      return false;
-    }
-
-    // Search query filter
-    if (activeSearch) {
-      const matchName = stack.name.toLowerCase().includes(activeSearch);
-      const matchHost = stack.hostName.toLowerCase().includes(activeSearch);
-      const matchService = stack.services.some((s) => s.toLowerCase().includes(activeSearch));
-      if (!matchName && !matchHost && !matchService) {
+  const filteredStacks = useMemo(() => {
+    return stacks.filter((stack) => {
+      // Source filter
+      if (sourceFilter !== 'all' && stack.source !== sourceFilter) {
         return false;
       }
-    }
 
-    return true;
-  });
+      // Status filter
+      if (statusFilter === 'running' && stack.rollup.running === 0) {
+        return false;
+      }
 
-  const totalRunningContainers = stacks.reduce((sum, s) => sum + s.rollup.running, 0);
+      // Search query filter
+      if (activeSearch) {
+        const matchName = stack.name.toLowerCase().includes(activeSearch);
+        const matchHost = stack.hostName.toLowerCase().includes(activeSearch);
+        const matchService = stack.services.some((s) => s.toLowerCase().includes(activeSearch));
+        if (!matchName && !matchHost && !matchService) {
+          return false;
+        }
+      }
+
+      return true;
+    });
+  }, [stacks, sourceFilter, statusFilter, activeSearch]);
+
+  const totalRunningContainers = useMemo(
+    () => stacks.reduce((sum, s) => sum + s.rollup.running, 0),
+    [stacks]
+  );
 
   return (
     <div className="space-y-4">
+      {/* Reachability Warning Banner */}
+      {!dismissedUnreachable && unreachableNodes.length > 0 && (
+        <div className="p-3.5 bg-amber-950/40 border border-amber-800/60 rounded-xl text-amber-200 text-xs flex items-start justify-between gap-3 shadow-sm">
+          <div className="flex items-start gap-2.5 min-w-0">
+            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+            <div className="space-y-1 min-w-0 leading-relaxed">
+              <div className="font-semibold text-amber-300">
+                Cluster Node Reachability Warning
+              </div>
+              <div className="text-slate-300">
+                {unreachableNodes.length === 1 ? 'A cluster node' : `${unreachableNodes.length} cluster nodes`} failed to respond or timed out. Stacks from {unreachableNodes.length === 1 ? 'this node' : 'these nodes'} may be omitted:
+              </div>
+              <div className="flex flex-wrap gap-1.5 pt-1">
+                {unreachableNodes.map((node) => (
+                  <span
+                    key={node.id}
+                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-900/40 text-amber-200 border border-amber-700/50 font-mono text-[11px] tabular-nums"
+                    title={node.error ? `Error: ${node.error}` : undefined}
+                  >
+                    <Server className="w-3 h-3 text-amber-400" />
+                    {node.name}
+                    {node.error && <span className="opacity-75 text-[10px]">({node.error})</span>}
+                  </span>
+                ))}
+              </div>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissedUnreachable(true)}
+            aria-label="Dismiss reachability warning"
+            className="text-amber-400 hover:text-amber-200 p-1 rounded-md hover:bg-amber-900/40 transition-colors flex-shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400"
+          >
+            <X className="w-4 h-4" />
+          </button>
+        </div>
+      )}
+
       {/* Top Controls Bar */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-800">
         <div className="flex items-center gap-2">
@@ -94,7 +134,7 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
             <Layers className="w-5 h-5 text-rose-500" />
             Compose Stacks
           </h2>
-          <Badge variant="outline" className="text-xs font-mono bg-slate-900 border-slate-700 text-slate-300">
+          <Badge variant="outline" className="text-xs font-mono tabular-nums bg-slate-900 border-slate-700 text-slate-300">
             {filteredStacks.length} {filteredStacks.length === 1 ? 'stack' : 'stacks'} • {totalRunningContainers} running
           </Badge>
         </div>
@@ -167,8 +207,8 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
               <Input
                 value={localSearch}
                 onChange={(e) => setLocalSearch(e.target.value)}
-                placeholder="Filter stacks..."
-                className="h-8 pl-8 pr-2.5 text-xs bg-slate-900 border-slate-800 w-36 sm:w-44 focus:ring-rose-500 text-slate-200"
+                placeholder="Filter stacks…"
+                className="h-8 pl-8 pr-2.5 text-xs bg-slate-900 border-slate-800 w-36 sm:w-44 focus-visible:ring-1 focus-visible:ring-rose-500 text-slate-200"
               />
             </div>
           )}
@@ -185,7 +225,7 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
       {isLoading ? (
         <div className="p-16 text-center text-xs text-slate-400 flex flex-col items-center justify-center gap-2">
           <Loader2 className="w-6 h-6 animate-spin text-rose-500" />
-          <span>Loading stacks...</span>
+          <span>Loading stacks…</span>
         </div>
       ) : filteredStacks.length === 0 ? (
         <div className="p-12 border border-slate-800 rounded-xl text-center text-xs text-slate-500 bg-slate-950/40">
@@ -219,8 +259,16 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
               return (
                 <div
                   key={`${stack.hostId}-${stack.name}`}
-                  onClick={() => setSelectedStack(stack)}
-                  className="group px-3.5 py-3 rounded-lg border border-slate-800/80 bg-slate-900/40 hover:bg-slate-900 hover:border-slate-700 transition-colors cursor-pointer flex items-center justify-between gap-3 shadow-sm"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => setSelectedStackKey({ hostId: stack.hostId, name: stack.name })}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      e.preventDefault();
+                      setSelectedStackKey({ hostId: stack.hostId, name: stack.name });
+                    }
+                  }}
+                  className="group px-3.5 py-3 rounded-lg border border-slate-800/80 bg-slate-900/40 hover:bg-slate-900 hover:border-slate-700 transition-colors cursor-pointer flex items-center justify-between gap-3 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-rose-500"
                 >
                   <div className="flex items-center gap-2.5 min-w-0">
                     <span
@@ -288,10 +336,10 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
 
       {/* Slide-over Sheet for Stack Detail */}
       <StackDetailSheet
-        stack={stacks.find((s) => s.hostId === selectedStack?.hostId && s.name === selectedStack?.name) || selectedStack}
+        stack={selectedStack}
         isOpen={Boolean(selectedStack)}
-        onClose={() => setSelectedStack(null)}
-        onStackUpdated={setSelectedStack}
+        onClose={() => setSelectedStackKey(null)}
+        onStackUpdated={(updated) => setSelectedStackKey({ hostId: updated.hostId, name: updated.name })}
         onSelectContainer={(containerId, hostEndpoint, containerSummary) => {
           setSelectedContainer({
             id: containerId,

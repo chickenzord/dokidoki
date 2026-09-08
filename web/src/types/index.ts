@@ -194,3 +194,19 @@ export interface OperationResult {
   message: string;
   output?: string;
 }
+
+export interface UnreachableNode {
+  id: string;
+  name: string;
+  error?: string;
+}
+
+export interface ClusterStacksResult {
+  items: ClusterStack[];
+  unreachableNodes: UnreachableNode[];
+}
+
+export interface ClusterContainersResult {
+  items: ClusterContainer[];
+  unreachableNodes: UnreachableNode[];
+}

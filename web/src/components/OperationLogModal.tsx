@@ -116,31 +116,90 @@ const stripAnsi = (str: string): string => {
     .replace(/\r/g, '');
 };
 
-interface OperationLogModalProps {
-  isOpen: boolean;
-  onClose: () => void;
+export interface OperationTask {
   title: string;
   subtitle?: string;
-  output: string;
-  isRunning: boolean;
+  action: (onChunk: (chunk: string) => void) => Promise<unknown>;
+  onSuccess?: () => void;
+}
+
+export interface OperationLogModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  title?: string;
+  subtitle?: string;
+  output?: string;
+  isRunning?: boolean;
   error?: string | null;
   success?: boolean;
+  // When provided, the modal manages streaming internally to isolate frequent chunks from parent components
+  operation?: OperationTask | null;
 }
 
 export const OperationLogModal: React.FC<OperationLogModalProps> = ({
   isOpen,
   onClose,
-  title,
+  title = '',
   subtitle,
-  output,
-  isRunning,
-  error,
-  success,
+  output = '',
+  isRunning: controlledRunning = false,
+  error: controlledError = null,
+  success: controlledSuccess = false,
+  operation,
 }) => {
   const [copied, setCopied] = useState(false);
+  const [internalOutput, setInternalOutput] = useState('');
+  const [internalRunning, setInternalRunning] = useState(false);
+  const [internalError, setInternalError] = useState<string | null>(null);
+  const [internalSuccess, setInternalSuccess] = useState(false);
 
   useEffect(() => {
-    if (!isRunning) return;
+    if (!isOpen || !operation) return;
+
+    setInternalOutput('');
+    setInternalError(null);
+    setInternalSuccess(false);
+    setInternalRunning(true);
+
+    let isMounted = true;
+
+    operation
+      .action((chunk) => {
+        if (isMounted) {
+          setInternalOutput((prev) => prev + chunk);
+        }
+      })
+      .then(() => {
+        if (isMounted) {
+          setInternalSuccess(true);
+          operation.onSuccess?.();
+        }
+      })
+      .catch((err: any) => {
+        if (isMounted) {
+          setInternalError(err?.message || 'Operation failed');
+        }
+      })
+      .finally(() => {
+        if (isMounted) {
+          setInternalRunning(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [isOpen, operation]);
+
+  const activeTitle = operation?.title || title;
+  const activeSubtitle = operation?.subtitle || subtitle;
+  const activeOutput = operation ? internalOutput : output;
+  const activeRunning = operation ? internalRunning : controlledRunning;
+  const activeError = operation ? internalError : controlledError;
+  const activeSuccess = operation ? internalSuccess : controlledSuccess;
+
+  useEffect(() => {
+    if (!activeRunning) return;
 
     const handleBeforeUnload = (e: BeforeUnloadEvent) => {
       e.preventDefault();
@@ -151,50 +210,50 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
     return () => {
       window.removeEventListener('beforeunload', handleBeforeUnload);
     };
-  }, [isRunning]);
+  }, [activeRunning]);
 
   const handleCopy = () => {
-    const textToCopy = error ? `${output}\n\nError: ${error}` : output;
+    const textToCopy = activeError ? `${activeOutput}\n\nError: ${activeError}` : activeOutput;
     navigator.clipboard.writeText(stripAnsi(textToCopy));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
   return (
-    <Dialog open={isOpen} onOpenChange={(open) => !open && !isRunning && onClose()}>
+    <Dialog open={isOpen} onOpenChange={(open) => !open && !activeRunning && onClose()}>
       <DialogContent className="w-full sm:max-w-2xl bg-slate-900 border-slate-800 text-slate-100">
         <DialogHeader>
           <div className="flex items-center justify-between pr-6">
             <DialogTitle className="text-lg font-bold text-white flex items-center gap-2">
               <TerminalIcon className="w-5 h-5 text-rose-500" />
-              {title}
+              {activeTitle}
             </DialogTitle>
-            {isRunning ? (
+            {activeRunning ? (
               <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-xs flex items-center gap-1.5">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 Running
               </Badge>
-            ) : error ? (
+            ) : activeError ? (
               <Badge variant="outline" className="bg-rose-950/40 text-rose-400 border-rose-800/60 font-mono text-xs flex items-center gap-1.5">
                 <XCircle className="w-3 h-3" />
                 Failed
               </Badge>
-            ) : success ? (
+            ) : activeSuccess ? (
               <Badge variant="outline" className="bg-emerald-950/40 text-emerald-400 border-emerald-800/60 font-mono text-xs flex items-center gap-1.5">
                 <CheckCircle2 className="w-3 h-3" />
                 Success
               </Badge>
             ) : null}
           </div>
-          {subtitle && (
+          {activeSubtitle && (
             <DialogDescription className="text-slate-400 text-xs">
-              {subtitle}
+              {activeSubtitle}
             </DialogDescription>
           )}
         </DialogHeader>
 
         <div className="space-y-3">
-          {isRunning && (
+          {activeRunning && (
             <div className="p-2.5 bg-amber-950/30 border border-amber-800/50 rounded-lg text-amber-300 text-xs flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
               <span>
@@ -204,12 +263,13 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
           )}
 
           <div className="relative group">
-            {isOpen && <TerminalView output={output} isRunning={isRunning} />}
+            {isOpen && <TerminalView output={activeOutput} isRunning={activeRunning} />}
 
-            {output && (
+            {activeOutput && (
               <Button
                 size="icon"
                 variant="outline"
+                aria-label="Copy logs to clipboard"
                 className="absolute top-2 right-2 h-7 w-7 bg-slate-900/80 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 opacity-0 group-hover:opacity-100 transition-opacity z-10"
                 onClick={handleCopy}
                 title="Copy log"
@@ -219,24 +279,24 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
             )}
           </div>
 
-          {error && (
+          {activeError && (
             <div className="p-3 bg-rose-950/30 border border-rose-800/50 rounded-lg text-rose-300 text-xs flex items-start gap-2">
               <XCircle className="w-4 h-4 text-rose-400 shrink-0 mt-0.5" />
-              <div className="break-all font-mono">{error}</div>
+              <div className="break-all font-mono">{activeError}</div>
             </div>
           )}
         </div>
 
         <DialogFooter className="flex items-center justify-between sm:justify-between pt-2">
           <div className="text-xs text-slate-500">
-            {isRunning ? 'Execution in progress, please wait...' : 'Operation finished.'}
+            {activeRunning ? 'Execution in progress, please wait...' : 'Operation finished.'}
           </div>
           <Button
-            variant={isRunning ? 'outline' : 'default'}
+            variant={activeRunning ? 'outline' : 'default'}
             size="sm"
             onClick={onClose}
-            disabled={isRunning}
-            className={isRunning ? 'border-slate-700 text-slate-400' : 'bg-rose-600 hover:bg-rose-700 text-white'}
+            disabled={activeRunning}
+            className={activeRunning ? 'border-slate-700 text-slate-400' : 'bg-rose-600 hover:bg-rose-700 text-white'}
           >
             Close
           </Button>

@@ -9,6 +9,9 @@ import {
   StackFilesResponse,
   EnrichedContainerInspect,
   ContainerComposeResponse,
+  ClusterStacksResult,
+  ClusterContainersResult,
+  UnreachableNode,
 } from '../types';
 
 export function getNodeEndpoint(node: Node): string {
@@ -37,8 +40,8 @@ export function useClusterStacksQuery(selectedHostId?: string | null) {
   const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
 
   return useQuery({
-    queryKey: ['cluster-stacks', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
-    queryFn: async (): Promise<ClusterStack[]> => {
+    queryKey: ['cluster-stacks', selectedHostId ?? 'all'],
+    queryFn: async (): Promise<ClusterStacksResult> => {
       const isAllNodes = !selectedHostId || selectedHostId === 'all';
 
       // When querying for all nodes, filter out offline nodes to avoid stalling on dead peers
@@ -57,7 +60,7 @@ export function useClusterStacksQuery(selectedHostId?: string | null) {
         targetNodes.map(async (node) => {
           // If remote node has no reachable address, do not attempt query or fallback to local
           if (!node.is_self && (!node.addresses || node.addresses.length === 0)) {
-            return [];
+            throw new Error(`Node ${node.name} has no reachable IP or address`);
           }
           const endpoint = getNodeEndpoint(node);
           const stacks = await api.getStacks(endpoint, undefined, { timeout: CLUSTER_NODE_TIMEOUT_MS });
@@ -71,15 +74,23 @@ export function useClusterStacksQuery(selectedHostId?: string | null) {
       );
 
       const allStacks: ClusterStack[] = [];
-      results.forEach((res) => {
+      const unreachableNodes: UnreachableNode[] = [];
+
+      results.forEach((res, index) => {
+        const node = targetNodes[index];
         if (res.status === 'fulfilled') {
           allStacks.push(...res.value);
         } else {
-          console.warn('Failed to fetch stacks for node:', res.reason);
+          console.warn('Failed to fetch stacks for node:', node.name, res.reason);
+          unreachableNodes.push({
+            id: node.id,
+            name: node.name,
+            error: res.reason?.message || String(res.reason),
+          });
         }
       });
 
-      return allStacks;
+      return { items: allStacks, unreachableNodes };
     },
     enabled: !nodesLoading,
     refetchInterval: 10000,
@@ -90,8 +101,8 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
   const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
 
   return useQuery({
-    queryKey: ['cluster-containers', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
-    queryFn: async (): Promise<ClusterContainer[]> => {
+    queryKey: ['cluster-containers', selectedHostId ?? 'all'],
+    queryFn: async (): Promise<ClusterContainersResult> => {
       const isAllNodes = !selectedHostId || selectedHostId === 'all';
 
       // When querying for all nodes, filter out offline nodes to avoid stalling on dead peers
@@ -110,7 +121,7 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
         targetNodes.map(async (node) => {
           // If remote node has no reachable address, do not attempt query or fallback to local
           if (!node.is_self && (!node.addresses || node.addresses.length === 0)) {
-            return [];
+            throw new Error(`Node ${node.name} has no reachable IP or address`);
           }
           const endpoint = getNodeEndpoint(node);
           const containers = await api.getContainers(endpoint, undefined, { timeout: CLUSTER_NODE_TIMEOUT_MS });
@@ -124,15 +135,23 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
       );
 
       const allContainers: ClusterContainer[] = [];
-      results.forEach((res) => {
+      const unreachableNodes: UnreachableNode[] = [];
+
+      results.forEach((res, index) => {
+        const node = targetNodes[index];
         if (res.status === 'fulfilled') {
           allContainers.push(...res.value);
         } else {
-          console.warn('Failed to fetch containers for node:', res.reason);
+          console.warn('Failed to fetch containers for node:', node.name, res.reason);
+          unreachableNodes.push({
+            id: node.id,
+            name: node.name,
+            error: res.reason?.message || String(res.reason),
+          });
         }
       });
 
-      return allContainers;
+      return { items: allContainers, unreachableNodes };
     },
     enabled: !nodesLoading,
     refetchInterval: 10000,

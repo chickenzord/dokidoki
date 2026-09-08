@@ -3,6 +3,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { ClusterContainer } from '../types';
 import { useContainerInspectQuery } from '../hooks/useClusterData';
 import { api } from '../services/api';
+import { getHostForContainer } from '../lib/utils';
 import {
   Sheet,
   SheetContent,
@@ -12,7 +13,7 @@ import {
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { GenerateComposeDialog } from './GenerateComposeDialog';
-import { OperationLogModal } from './OperationLogModal';
+import { OperationLogModal, OperationTask } from './OperationLogModal';
 import {
   Server,
   Box,
@@ -34,6 +35,7 @@ import {
   Download,
   AlertTriangle,
   XCircle,
+  ExternalLink,
 } from 'lucide-react';
 
 interface ContainerDetailSheetProps {
@@ -56,14 +58,8 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
   const [actionLoading, setActionLoading] = useState<'start' | 'stop' | 'restart' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Streaming log modal states
-  const [logModalOpen, setLogModalOpen] = useState(false);
-  const [logTitle, setLogTitle] = useState('');
-  const [logSubtitle, setLogSubtitle] = useState('');
-  const [logOutput, setLogOutput] = useState('');
-  const [logRunning, setLogRunning] = useState(false);
-  const [logError, setLogError] = useState<string | null>(null);
-  const [logSuccess, setLogSuccess] = useState(false);
+  // Streaming operation state (isolated in modal to avoid re-rendering entire sheet on log chunks)
+  const [activeOperation, setActiveOperation] = useState<OperationTask | null>(null);
 
   const hostEndpoint = container?.hostEndpoint || '';
   const containerId = container?.id || '';
@@ -180,30 +176,13 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
     }
   };
 
-  const handlePull = async () => {
-    setLogTitle(`Pull Image`);
-    setLogSubtitle(`${container.image} on ${container.hostName}`);
-    setLogOutput('');
-    setLogError(null);
-    setLogSuccess(false);
-    setLogRunning(true);
-    setLogModalOpen(true);
-
-    try {
-      await api.pullContainer(
-        container.id,
-        (chunk) => {
-          setLogOutput((prev) => prev + chunk);
-        },
-        hostEndpoint
-      );
-      setLogSuccess(true);
-      invalidateContainerData();
-    } catch (err: any) {
-      setLogError(err.message || 'Failed to pull container image');
-    } finally {
-      setLogRunning(false);
-    }
+  const handlePull = () => {
+    setActiveOperation({
+      title: 'Pull Image',
+      subtitle: `${container.image} on ${container.hostName}`,
+      action: (chunk) => api.pullContainer(container.id, chunk, hostEndpoint),
+      onSuccess: invalidateContainerData,
+    });
   };
 
   return (
@@ -425,7 +404,22 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                         <tr key={idx} className="hover:bg-slate-800/30">
                           <td className="p-2.5 uppercase text-slate-400 text-[10px]">{p.type}</td>
                           <td className="p-2.5">{p.privatePort}</td>
-                          <td className="p-2.5 text-rose-400">{p.publicPort ? p.publicPort : '—'}</td>
+                          <td className="p-2.5 tabular-nums">
+                            {p.publicPort ? (
+                              <a
+                                href={`http://${getHostForContainer(container.hostEndpoint)}:${p.publicPort}`}
+                                target="_blank"
+                                rel="noreferrer"
+                                title={`Open service at http://${getHostForContainer(container.hostEndpoint)}:${p.publicPort}`}
+                                className="inline-flex items-center text-rose-400 hover:text-rose-300 hover:underline"
+                              >
+                                <span>{p.publicPort}</span>
+                                <ExternalLink className="w-2.5 h-2.5 ml-1 opacity-70" />
+                              </a>
+                            ) : (
+                              <span className="text-slate-600">—</span>
+                            )}
+                          </td>
                           <td className="p-2.5 text-slate-400">{p.ip || '0.0.0.0'}</td>
                         </tr>
                       ))}
@@ -568,14 +562,9 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
       />
 
       <OperationLogModal
-        isOpen={logModalOpen}
-        onClose={() => setLogModalOpen(false)}
-        title={logTitle}
-        subtitle={logSubtitle}
-        output={logOutput}
-        isRunning={logRunning}
-        error={logError}
-        success={logSuccess}
+        isOpen={Boolean(activeOperation)}
+        onClose={() => setActiveOperation(null)}
+        operation={activeOperation}
       />
     </>
   );
