@@ -221,10 +221,14 @@ class ApiService {
   public async streamOperation(
     path: string,
     onChunk?: (text: string) => void,
-    customEndpoint?: string
+    customEndpoint?: string,
+    dimensions?: { cols?: number; rows?: number }
   ): Promise<OperationResult> {
     const streamQuery = onChunk ? (path.includes('?') ? '&stream=true' : '?stream=true') : '';
-    const url = this.resolveUrl(`${path}${streamQuery}`, customEndpoint);
+    const dimQuery = dimensions?.cols && dimensions?.rows
+      ? `&cols=${dimensions.cols}&rows=${dimensions.rows}`
+      : '';
+    const url = this.resolveUrl(`${path}${streamQuery}${dimQuery}`, customEndpoint);
 
     const response = await fetch(url, {
       method: 'POST',
@@ -273,25 +277,51 @@ class ApiService {
     return this.request<OperationResult>(`/api/v1/containers/${encodeURIComponent(id)}/stop${q}`, { method: 'POST' }, customEndpoint);
   }
 
-  public async pullContainer(id: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
-    return this.streamOperation(`/api/v1/containers/${encodeURIComponent(id)}/pull`, onChunk, customEndpoint);
+  public async pullContainer(
+    id: string,
+    onChunk?: (text: string) => void,
+    customEndpoint?: string,
+    dimensions?: { cols?: number; rows?: number }
+  ): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/containers/${encodeURIComponent(id)}/pull`, onChunk, customEndpoint, dimensions);
   }
 
-  public async composeUp(name: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
-    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/up`, onChunk, customEndpoint);
+  public async composeUp(
+    name: string,
+    onChunk?: (text: string) => void,
+    customEndpoint?: string,
+    dimensions?: { cols?: number; rows?: number }
+  ): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/up`, onChunk, customEndpoint, dimensions);
   }
 
-  public async composeDown(name: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
-    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/down`, onChunk, customEndpoint);
+  public async composeDown(
+    name: string,
+    onChunk?: (text: string) => void,
+    customEndpoint?: string,
+    dimensions?: { cols?: number; rows?: number }
+  ): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/down`, onChunk, customEndpoint, dimensions);
   }
 
-  public async composeRestart(name: string, service?: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
+  public async composeRestart(
+    name: string,
+    service?: string,
+    onChunk?: (text: string) => void,
+    customEndpoint?: string,
+    dimensions?: { cols?: number; rows?: number }
+  ): Promise<OperationResult> {
     const q = service ? `?service=${encodeURIComponent(service)}` : '';
-    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/restart${q}`, onChunk, customEndpoint);
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/restart${q}`, onChunk, customEndpoint, dimensions);
   }
 
-  public async composePull(name: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
-    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/pull`, onChunk, customEndpoint);
+  public async composePull(
+    name: string,
+    onChunk?: (text: string) => void,
+    customEndpoint?: string,
+    dimensions?: { cols?: number; rows?: number }
+  ): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/pull`, onChunk, customEndpoint, dimensions);
   }
 }
 

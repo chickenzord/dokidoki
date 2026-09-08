@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+import React, { useEffect, useRef, useState, useCallback, useImperativeHandle, forwardRef } from 'react';
 import {
   Dialog,
   DialogContent,
@@ -14,100 +14,138 @@ import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
 
+export interface TerminalViewHandle {
+  getPlainText: () => string;
+  getDimensions: () => { cols: number; rows: number };
+}
+
 interface TerminalViewProps {
   output: string;
   isRunning: boolean;
+  onDimensions?: (dims: { cols: number; rows: number }) => void;
+  onReady?: (dims: { cols: number; rows: number }) => void;
 }
 
-const TerminalView: React.FC<TerminalViewProps> = ({ output, isRunning }) => {
-  const containerRef = useRef<HTMLDivElement>(null);
-  const termRef = useRef<XTerm | null>(null);
-  const fitAddonRef = useRef<FitAddon | null>(null);
-  const lastOutputLen = useRef(0);
+const TerminalView = forwardRef<TerminalViewHandle, TerminalViewProps>(
+  ({ output, isRunning, onDimensions, onReady }, ref) => {
+    const containerRef = useRef<HTMLDivElement>(null);
+    const termRef = useRef<XTerm | null>(null);
+    const fitAddonRef = useRef<FitAddon | null>(null);
+    const lastOutputLen = useRef(0);
+    const isReadyReported = useRef(false);
 
-  useEffect(() => {
-    if (!containerRef.current) return;
-
-    const term = new XTerm({
-      convertEol: true,
-      disableStdin: true,
-      cursorBlink: false,
-      scrollback: 5000,
-      fontFamily: 'monospace',
-      fontSize: 12,
-      lineHeight: 1.3,
-      theme: {
-        background: '#020617', // slate-950
-        foreground: '#cbd5e1', // slate-300
-        selectionBackground: '#334155', // slate-700
+    useImperativeHandle(ref, () => ({
+      getPlainText: () => {
+        const term = termRef.current;
+        if (!term) return '';
+        term.selectAll();
+        const sel = term.getSelection();
+        term.clearSelection();
+        return sel;
       },
-    });
+      getDimensions: () => {
+        const term = termRef.current;
+        return {
+          cols: term?.cols || 80,
+          rows: term?.rows || 24,
+        };
+      },
+    }));
 
-    const fitAddon = new FitAddon();
-    term.loadAddon(fitAddon);
-    term.open(containerRef.current);
+    useEffect(() => {
+      if (!containerRef.current) return;
 
-    termRef.current = term;
-    fitAddonRef.current = fitAddon;
-    lastOutputLen.current = 0;
+      const term = new XTerm({
+        convertEol: false,
+        disableStdin: true,
+        cursorBlink: false,
+        scrollback: 5000,
+        fontFamily: 'monospace',
+        fontSize: 12,
+        lineHeight: 1.3,
+        theme: {
+          background: '#020617', // slate-950
+          foreground: '#cbd5e1', // slate-300
+          selectionBackground: '#334155', // slate-700
+        },
+      });
 
-    const safeFit = () => {
-      try {
-        if (containerRef.current && containerRef.current.clientWidth > 0 && containerRef.current.clientHeight > 0) {
-          fitAddon.fit();
+      const fitAddon = new FitAddon();
+      term.loadAddon(fitAddon);
+      term.open(containerRef.current);
+
+      termRef.current = term;
+      fitAddonRef.current = fitAddon;
+      lastOutputLen.current = 0;
+      isReadyReported.current = false;
+
+      const safeFit = () => {
+        try {
+          if (containerRef.current && containerRef.current.clientWidth > 0 && containerRef.current.clientHeight > 0) {
+            fitAddon.fit();
+            if (term.cols && term.rows) {
+              onDimensions?.({ cols: term.cols, rows: term.rows });
+              if (!isReadyReported.current) {
+                isReadyReported.current = true;
+                onReady?.({ cols: term.cols, rows: term.rows });
+              }
+            }
+          }
+        } catch {
+          // ignore layout errors during transitions
         }
-      } catch {
-        // ignore layout errors during transitions
-      }
-    };
+      };
 
-    safeFit();
-    const timer1 = setTimeout(safeFit, 50);
-    const timer2 = setTimeout(safeFit, 200);
-
-    const ro = new ResizeObserver(() => {
       safeFit();
-    });
-    ro.observe(containerRef.current);
+      const timer1 = setTimeout(safeFit, 50);
+      const timer2 = setTimeout(safeFit, 150);
 
-    return () => {
-      clearTimeout(timer1);
-      clearTimeout(timer2);
-      ro.disconnect();
-      term.dispose();
-      termRef.current = null;
-      fitAddonRef.current = null;
-      lastOutputLen.current = 0;
-    };
-  }, []);
+      const ro = new ResizeObserver(() => {
+        safeFit();
+      });
+      ro.observe(containerRef.current);
 
-  useEffect(() => {
-    const term = termRef.current;
-    if (!term) return;
+      return () => {
+        clearTimeout(timer1);
+        clearTimeout(timer2);
+        ro.disconnect();
+        term.dispose();
+        termRef.current = null;
+        fitAddonRef.current = null;
+        lastOutputLen.current = 0;
+        isReadyReported.current = false;
+      };
+    }, []);
 
-    if (output.length < lastOutputLen.current) {
-      term.reset();
-      lastOutputLen.current = 0;
-    }
+    useEffect(() => {
+      const term = termRef.current;
+      if (!term) return;
 
-    if (output.length > lastOutputLen.current) {
-      const chunk = output.slice(lastOutputLen.current);
-      term.write(chunk);
-      lastOutputLen.current = output.length;
-    }
-  }, [output]);
+      if (output.length < lastOutputLen.current) {
+        term.reset();
+        lastOutputLen.current = 0;
+      }
 
-  return (
-    <div className="relative bg-slate-950 border border-slate-800 rounded-lg p-3 h-80 flex flex-col overflow-hidden">
-      <div ref={containerRef} className="w-full flex-1 overflow-hidden" />
-      {!output && (
-        <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-slate-500 text-xs italic">
-          {isRunning ? 'Waiting for output...' : 'No output received.'}
-        </div>
-      )}
-    </div>
-  );
-};
+      if (output.length > lastOutputLen.current) {
+        const chunk = output.slice(lastOutputLen.current);
+        term.write(chunk);
+        lastOutputLen.current = output.length;
+      }
+    }, [output]);
+
+    return (
+      <div className="relative bg-slate-950 border border-slate-800 rounded-lg p-3 h-80 flex flex-col overflow-hidden">
+        <div ref={containerRef} className="w-full flex-1 overflow-hidden" />
+        {!output && (
+          <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-slate-500 text-xs italic">
+            {isRunning ? 'Waiting for output...' : 'No output received.'}
+          </div>
+        )}
+      </div>
+    );
+  }
+);
+TerminalView.displayName = 'TerminalView';
 
 const stripAnsi = (str: string): string => {
   return str
@@ -119,7 +157,10 @@ const stripAnsi = (str: string): string => {
 export interface OperationTask {
   title: string;
   subtitle?: string;
-  action: (onChunk: (chunk: string) => void) => Promise<unknown>;
+  action: (
+    onChunk: (chunk: string) => void,
+    dimensions?: { cols?: number; rows?: number }
+  ) => Promise<unknown>;
   onSuccess?: () => void;
 }
 
@@ -147,49 +188,79 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
   success: controlledSuccess = false,
   operation,
 }) => {
+  const terminalRef = useRef<TerminalViewHandle>(null);
   const [copied, setCopied] = useState(false);
   const [internalOutput, setInternalOutput] = useState('');
   const [internalRunning, setInternalRunning] = useState(false);
   const [internalError, setInternalError] = useState<string | null>(null);
   const [internalSuccess, setInternalSuccess] = useState(false);
+  const [readyDimensions, setReadyDimensions] = useState<{ cols: number; rows: number } | null>(null);
+  const activeOperationRef = useRef<OperationTask | null>(null);
+  const terminalDimsRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
 
+  const handleDimensions = useCallback((dims: { cols: number; rows: number }) => {
+    terminalDimsRef.current = dims;
+  }, []);
+
+  const handleReady = useCallback((dims: { cols: number; rows: number }) => {
+    terminalDimsRef.current = dims;
+    setReadyDimensions((prev) => prev || dims);
+  }, []);
+
+  // Reset ready state when modal closes
   useEffect(() => {
-    if (!isOpen || !operation) return;
+    if (!isOpen) {
+      setReadyDimensions(null);
+      activeOperationRef.current = null;
+    }
+  }, [isOpen]);
 
+  // Fallback if measurement doesn't fire within 300ms (e.g. headless test or hidden tab)
+  useEffect(() => {
+    if (!isOpen || !operation || readyDimensions) return;
+    const timer = setTimeout(() => {
+      const liveDims = terminalRef.current?.getDimensions() || terminalDimsRef.current;
+      if (liveDims && liveDims.cols > 0 && liveDims.rows > 0) {
+        setReadyDimensions((prev) => prev || liveDims);
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [isOpen, operation, readyDimensions]);
+
+  // Trigger streaming action ONLY when terminal has been built and reported its actual dimensions
+  useEffect(() => {
+    if (!isOpen || !operation || !readyDimensions) return;
+    if (activeOperationRef.current === operation) return;
+
+    activeOperationRef.current = operation;
     setInternalOutput('');
     setInternalError(null);
     setInternalSuccess(false);
     setInternalRunning(true);
 
-    let isMounted = true;
-
     operation
       .action((chunk) => {
-        if (isMounted) {
+        if (activeOperationRef.current === operation) {
           setInternalOutput((prev) => prev + chunk);
         }
-      })
+      }, readyDimensions)
       .then(() => {
-        if (isMounted) {
+        if (activeOperationRef.current === operation) {
           setInternalSuccess(true);
           operation.onSuccess?.();
         }
       })
       .catch((err: any) => {
-        if (isMounted) {
+        if (activeOperationRef.current === operation) {
           setInternalError(err?.message || 'Operation failed');
         }
       })
       .finally(() => {
-        if (isMounted) {
+        if (activeOperationRef.current === operation) {
           setInternalRunning(false);
         }
       });
-
-    return () => {
-      isMounted = false;
-    };
-  }, [isOpen, operation]);
+  }, [isOpen, operation, readyDimensions]);
 
   const activeTitle = operation?.title || title;
   const activeSubtitle = operation?.subtitle || subtitle;
@@ -213,8 +284,10 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
   }, [activeRunning]);
 
   const handleCopy = () => {
-    const textToCopy = activeError ? `${activeOutput}\n\nError: ${activeError}` : activeOutput;
-    navigator.clipboard.writeText(stripAnsi(textToCopy));
+    const termText = terminalRef.current?.getPlainText();
+    const baseText = termText && termText.trim().length > 0 ? termText : stripAnsi(activeOutput);
+    const textToCopy = activeError ? `${baseText}\n\nError: ${activeError}` : baseText;
+    navigator.clipboard.writeText(textToCopy);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -263,7 +336,15 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
           )}
 
           <div className="relative group">
-            {isOpen && <TerminalView output={activeOutput} isRunning={activeRunning} />}
+            {isOpen && (
+              <TerminalView
+                ref={terminalRef}
+                output={activeOutput}
+                isRunning={activeRunning}
+                onReady={handleReady}
+                onDimensions={handleDimensions}
+              />
+            )}
 
             {activeOutput && (
               <Button

@@ -180,7 +180,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
     setActiveOperation({
       title: 'Pull Image',
       subtitle: `${container.image} on ${container.hostName}`,
-      action: (chunk) => api.pullContainer(container.id, chunk, hostEndpoint),
+      action: (chunk, dims) => api.pullContainer(container.id, chunk, hostEndpoint, dims),
       onSuccess: invalidateContainerData,
     });
   };

@@ -502,6 +502,55 @@ echo "args: $@"
 	})
 }
 
+func TestPTYExecutionAndTerminalSize(t *testing.T) {
+	script := `
+if [ -t 1 ]; then
+    echo "stdout is a tty"
+else
+    echo "stdout is NOT a tty"
+fi
+`
+	binPath := createMockExecutable(t, script)
+	r := NewRunner(binPath, "")
+
+	composeDir := t.TempDir()
+	composePath := filepath.Join(composeDir, "compose.yaml")
+
+	t.Run("with terminal size uses PTY", func(t *testing.T) {
+		ctx := ContextWithTerminalSize(context.Background(), TerminalSize{Cols: 110, Rows: 30})
+		size, ok := TerminalSizeFromContext(ctx)
+		if !ok || size.Cols != 110 || size.Rows != 30 {
+			t.Fatalf("expected TerminalSize {Cols: 110, Rows: 30}, got %+v", size)
+		}
+
+		var out bytes.Buffer
+		err := r.run(ctx, composePath, &out, "up")
+		if err != nil {
+			t.Fatalf("run failed: %v", err)
+		}
+
+		output := out.String()
+		if !strings.Contains(output, "stdout is a tty") {
+			t.Errorf("expected stdout to be a tty, got output: %q", output)
+		}
+	})
+
+	t.Run("without terminal size falls back to standard pipe", func(t *testing.T) {
+		ctx := context.Background()
+
+		var out bytes.Buffer
+		err := r.run(ctx, composePath, &out, "up")
+		if err != nil {
+			t.Fatalf("run failed: %v", err)
+		}
+
+		output := out.String()
+		if !strings.Contains(output, "stdout is NOT a tty") {
+			t.Errorf("expected stdout to NOT be a tty (pipe fallback), got output: %q", output)
+		}
+	})
+}
+
 // syncBuffer is a thread-safe bytes.Buffer with an optional onWrite callback.
 type syncBuffer struct {
 	mu      sync.Mutex

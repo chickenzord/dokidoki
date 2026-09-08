@@ -1,10 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
+	"strconv"
 	"strings"
 
+	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/stack"
@@ -142,4 +145,44 @@ func (fw *flushWriter) Write(p []byte) (int, error) {
 		fw.f.Flush()
 	}
 	return n, err
+}
+
+func parseTerminalSize(r *http.Request) (compose.TerminalSize, bool) {
+	q := r.URL.Query()
+	colsStr := q.Get("cols")
+	rowsStr := q.Get("rows")
+	if colsStr == "" {
+		colsStr = r.Header.Get("X-Terminal-Cols")
+	}
+	if rowsStr == "" {
+		rowsStr = r.Header.Get("X-Terminal-Rows")
+	}
+
+	cols, err1 := strconv.Atoi(colsStr)
+	rows, err2 := strconv.Atoi(rowsStr)
+	if err1 != nil || err2 != nil || cols <= 0 || rows <= 0 {
+		return compose.TerminalSize{}, false
+	}
+
+	if cols < 20 {
+		cols = 20
+	} else if cols > 300 {
+		cols = 300
+	}
+	if rows < 5 {
+		rows = 5
+	} else if rows > 150 {
+		rows = 150
+	}
+
+	return compose.TerminalSize{Cols: uint16(cols), Rows: uint16(rows)}, true
+}
+
+func streamContext(r *http.Request) context.Context {
+	ctx := r.Context()
+	size, ok := parseTerminalSize(r)
+	if !ok {
+		return ctx
+	}
+	return compose.ContextWithTerminalSize(ctx, size)
 }

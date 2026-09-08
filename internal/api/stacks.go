@@ -260,7 +260,7 @@ func (s *Server) handleComposeUp(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 
 			fw := &flushWriter{w: w, f: flusher}
-			_, err := s.stackSvc.ComposeUp(r.Context(), name, fw)
+			_, err := s.stackSvc.ComposeUp(streamContext(r), name, fw)
 			if err != nil {
 				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
 			}
@@ -306,7 +306,7 @@ func (s *Server) handleComposeDown(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 
 			fw := &flushWriter{w: w, f: flusher}
-			_, err := s.stackSvc.ComposeDown(r.Context(), name, fw)
+			_, err := s.stackSvc.ComposeDown(streamContext(r), name, fw)
 			if err != nil {
 				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
 			}
@@ -353,7 +353,7 @@ func (s *Server) handleComposeRestart(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 
 			fw := &flushWriter{w: w, f: flusher}
-			_, err := s.stackSvc.ComposeRestart(r.Context(), name, service, fw)
+			_, err := s.stackSvc.ComposeRestart(streamContext(r), name, service, fw)
 			if err != nil {
 				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
 			}
@@ -399,7 +399,7 @@ func (s *Server) handleComposePull(w http.ResponseWriter, r *http.Request) {
 			flusher.Flush()
 
 			fw := &flushWriter{w: w, f: flusher}
-			_, err := s.stackSvc.ComposePull(r.Context(), name, fw)
+			_, err := s.stackSvc.ComposePull(streamContext(r), name, fw)
 			if err != nil {
 				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
 			}

@@ -10,10 +10,33 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+
+	"github.com/creack/pty"
 )
 
 // DefaultBin is the default compose command binary used if none is specified.
 const DefaultBin = "docker compose"
+
+// TerminalSize defines the pseudo-terminal window dimensions.
+type TerminalSize struct {
+	Cols uint16
+	Rows uint16
+}
+
+type terminalSizeContextKey struct{}
+
+// ContextWithTerminalSize returns a context annotated with PTY window dimensions.
+func ContextWithTerminalSize(ctx context.Context, size TerminalSize) context.Context {
+	return context.WithValue(ctx, terminalSizeContextKey{}, size)
+}
+
+// TerminalSizeFromContext extracts PTY window dimensions from context, or default (80x24) if not found.
+func TerminalSizeFromContext(ctx context.Context) (TerminalSize, bool) {
+	if size, ok := ctx.Value(terminalSizeContextKey{}).(TerminalSize); ok && size.Cols > 0 && size.Rows > 0 {
+		return size, true
+	}
+	return TerminalSize{Cols: 80, Rows: 24}, false
+}
 
 // Runner defines the interface for executing docker compose operations.
 type Runner interface {
@@ -120,6 +143,39 @@ func (r *CommandRunner) run(ctx context.Context, composePath string, out io.Writ
 	if out != nil {
 		writer = io.MultiWriter(out, &buf)
 	}
+
+	// Only use PTY if streaming output is requested AND an explicit terminal screen size was provided.
+	// Otherwise, fallback to standard pipe-based subprocess spawning.
+	if termSize, ok := TerminalSizeFromContext(ctx); ok && termSize.Cols > 0 && termSize.Rows > 0 && out != nil {
+		ptmx, ptyErr := pty.StartWithSize(cmd, &pty.Winsize{
+			Cols: termSize.Cols,
+			Rows: termSize.Rows,
+		})
+		if ptyErr == nil {
+			defer func() {
+				_ = ptmx.Close()
+			}()
+
+			// Copy ptmx output in real-time. On Linux, EIO is returned when the child process exits.
+			_, _ = io.Copy(writer, ptmx)
+
+			if err := cmd.Wait(); err != nil {
+				output := strings.TrimSpace(buf.String())
+				if ctxErr := ctx.Err(); ctxErr != nil {
+					if output != "" {
+						return fmt.Errorf("compose command failed: %w: %v: %s", ctxErr, err, output)
+					}
+					return fmt.Errorf("compose command failed: %w: %v", ctxErr, err)
+				}
+				if output != "" {
+					return fmt.Errorf("compose command failed: %w: %s", err, output)
+				}
+				return fmt.Errorf("compose command failed: %w", err)
+			}
+			return nil
+		}
+	}
+
 	cmd.Stdout = writer
 	cmd.Stderr = writer
 

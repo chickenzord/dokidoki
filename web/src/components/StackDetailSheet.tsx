@@ -353,7 +353,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     setActiveOperation({
       title: `Compose Up: ${stack.name}`,
       subtitle: `Host: ${stack.hostName} | Command: docker compose up -d --remove-orphans`,
-      action: (onChunk) => api.composeUp(stack.name, onChunk, hostEndpoint),
+      action: (onChunk, dims) => api.composeUp(stack.name, onChunk, hostEndpoint, dims),
       onSuccess: invalidateStackData,
     });
   };
@@ -373,7 +373,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     setActiveOperation({
       title: `Compose Down: ${stack.name}`,
       subtitle: `Host: ${stack.hostName} | Command: docker compose down`,
-      action: (onChunk) => api.composeDown(stack.name, onChunk, hostEndpoint),
+      action: (onChunk, dims) => api.composeDown(stack.name, onChunk, hostEndpoint, dims),
       onSuccess: invalidateStackData,
     });
   };
@@ -390,7 +390,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     setActiveOperation({
       title: `Compose Restart: ${stack.name}${titleSuffix}`,
       subtitle: `Host: ${stack.hostName} | Command: docker compose restart ${service || ''}`.trim(),
-      action: (onChunk) => api.composeRestart(stack.name, service, onChunk, hostEndpoint),
+      action: (onChunk, dims) => api.composeRestart(stack.name, service, onChunk, hostEndpoint, dims),
       onSuccess: invalidateStackData,
     });
   };
@@ -400,7 +400,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     setActiveOperation({
       title: `Compose Pull: ${stack.name}`,
       subtitle: `Host: ${stack.hostName} | Command: docker compose pull`,
-      action: (onChunk) => api.composePull(stack.name, onChunk, hostEndpoint),
+      action: (onChunk, dims) => api.composePull(stack.name, onChunk, hostEndpoint, dims),
       onSuccess: invalidateStackData,
     });
   };
