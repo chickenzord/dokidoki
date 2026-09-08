@@ -151,8 +151,6 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     setTimeout(() => setCopiedFile(null), 2000);
   };
 
-  if (!stack) return null;
-
   const activeFilesData = isExternal ? externalFilesData : managedFilesData;
   const files = activeFilesData?.files || [];
   const filesDir = activeFilesData?.dir;
@@ -355,6 +353,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   };
 
   const handleComposeUp = async () => {
+    if (!stack) return;
     setLogTitle(`Compose Up: ${stack.name}`);
     setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose up -d --remove-orphans`);
     setLogOutput('');
@@ -381,6 +380,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   };
 
   const handleComposeDown = async () => {
+    if (!stack) return;
     if (stack.is_self) {
       if (!window.confirm('Warning: This stack contains Dokidoki itself. Stopping it will shut down the server. Continue?')) {
         return;
@@ -417,6 +417,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   };
 
   const handleComposeRestart = async (service?: string) => {
+    if (!stack) return;
     if (stack.is_self) {
       if (!window.confirm('Warning: This stack contains Dokidoki itself. Restarting it may interrupt your connection. Continue?')) {
         return;
@@ -451,6 +452,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   };
 
   const handleComposePull = async () => {
+    if (!stack) return;
     setLogTitle(`Compose Pull: ${stack.name}`);
     setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose pull`);
     setLogOutput('');
@@ -475,6 +477,8 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
       setLogRunning(false);
     }
   };
+
+  if (!stack) return null;
 
   return (
     <>
