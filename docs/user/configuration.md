@@ -28,6 +28,7 @@ Configuration settings are resolved using the following order of precedence:
 | `DOKIDOKI_LOG_LEVEL` | `-log-level` | `info` | Logging verbosity: `debug`, `info`, `warn`, `error` |
 | `DOKIDOKI_LOG_FORMAT` | `-log-format` | `text` | Log format: `text` (human-readable) or `json` (structured) |
 | `DOCKER_HOST` | `-docker-host` | _(local socket)_ | Remote Docker daemon endpoint (e.g. `unix:///var/run/docker.sock` or `tcp://...`) |
+| `DOKIDOKI_DOCKER_COMPOSE_BIN` | `-docker-compose-bin` | `docker compose` | Docker compose CLI binary or command (e.g. `docker compose` or `docker-compose`) |
 
 ---
 
@@ -48,6 +49,9 @@ Configuration settings are resolved using the following order of precedence:
 
 - **`DOCKER_HOST` / `-docker-host`**
   Docker daemon connection string. By default, Dokidoki connects to the standard Docker socket at `/var/run/docker.sock`. To manage a remote engine, provide a TCP URL (e.g. `tcp://192.168.1.100:2375`).
+
+- **`DOKIDOKI_DOCKER_COMPOSE_BIN` / `-docker-compose-bin`**
+  Command or path to the Docker Compose CLI binary. Defaults to `docker compose`. Can be set to `docker-compose` or an absolute executable path. Used exclusively for Compose operations (`up`, `down`, `restart`, `pull`).
 
 ### Clustering & Node Identity
 

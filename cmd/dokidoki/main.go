@@ -14,6 +14,7 @@ import (
 
 	"github.com/chickenzord/dokidoki/internal/api"
 	"github.com/chickenzord/dokidoki/internal/cluster"
+	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/logger"
@@ -74,6 +75,7 @@ func main() {
 		{Key: "Bind", Value: cfg.Addr()},
 		{Key: "Stacks Dir", Value: cfg.StacksDir},
 		{Key: "Docker Host", Value: dockerHostVal},
+		{Key: "Docker Compose Bin", Value: cfg.DockerComposeBin},
 		{Key: "Cluster Token", Value: cfg.ClusterToken, Sensitive: true},
 		{Key: "mDNS Status", Value: mDNSVal},
 		{Key: "Advertised Addrs", Value: strings.Join(candidateAddrs, ", ")},
@@ -130,7 +132,8 @@ func main() {
 
 	// Initialize API Router and HTTP Server
 	scanner := stack.NewScanner(cfg.StacksDir)
-	stackSvc := stack.NewService(scanner, dockerCli, selfContainerID)
+	composeRunner := compose.NewRunner(cfg.DockerComposeBin, cfg.DockerHost)
+	stackSvc := stack.NewService(scanner, dockerCli, selfContainerID, stack.WithComposeRunner(composeRunner))
 	router := api.NewRouter(cfg, dockerCli, stackSvc, clusterManager, selfContainerID)
 
 	server := &http.Server{

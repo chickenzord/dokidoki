@@ -9,6 +9,7 @@ import {
   CreateStackRequest,
   ContainerComposeResponse,
   EnrichedContainerInspect,
+  OperationResult,
 } from '../types';
 
 class ApiService {
@@ -168,6 +169,86 @@ class ApiService {
   public async getContainerCompose(id: string, customEndpoint?: string): Promise<ContainerComposeResponse> {
     return this.request<ContainerComposeResponse>(`/api/v1/containers/${encodeURIComponent(id)}/compose`, { method: 'GET' }, customEndpoint);
   }
+
+  /**
+   * Performs an operation that can stream output or return JSON.
+   */
+  public async streamOperation(
+    path: string,
+    onChunk?: (text: string) => void,
+    customEndpoint?: string
+  ): Promise<OperationResult> {
+    const streamQuery = onChunk ? (path.includes('?') ? '&stream=true' : '?stream=true') : '';
+    const url = this.resolveUrl(`${path}${streamQuery}`, customEndpoint);
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        Accept: onChunk ? 'text/plain' : 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errBody = await response.json().catch(() => null);
+      throw new Error(errBody?.error || `HTTP ${response.status}: ${response.statusText}`);
+    }
+
+    if (onChunk && response.body) {
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let fullOutput = '';
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const chunk = decoder.decode(value, { stream: true });
+        fullOutput += chunk;
+        onChunk(chunk);
+      }
+      return {
+        success: true,
+        message: 'Operation completed successfully',
+        output: fullOutput,
+      };
+    }
+
+    return await response.json();
+  }
+
+  public async restartContainer(id: string, force = false, customEndpoint?: string): Promise<OperationResult> {
+    const q = force ? '?force=true' : '';
+    return this.request<OperationResult>(`/api/v1/containers/${encodeURIComponent(id)}/restart${q}`, { method: 'POST' }, customEndpoint);
+  }
+
+  public async startContainer(id: string, customEndpoint?: string): Promise<OperationResult> {
+    return this.request<OperationResult>(`/api/v1/containers/${encodeURIComponent(id)}/start`, { method: 'POST' }, customEndpoint);
+  }
+
+  public async stopContainer(id: string, force = false, customEndpoint?: string): Promise<OperationResult> {
+    const q = force ? '?force=true' : '';
+    return this.request<OperationResult>(`/api/v1/containers/${encodeURIComponent(id)}/stop${q}`, { method: 'POST' }, customEndpoint);
+  }
+
+  public async pullContainer(id: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/containers/${encodeURIComponent(id)}/pull`, onChunk, customEndpoint);
+  }
+
+  public async composeUp(name: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/up`, onChunk, customEndpoint);
+  }
+
+  public async composeDown(name: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/down`, onChunk, customEndpoint);
+  }
+
+  public async composeRestart(name: string, service?: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
+    const q = service ? `?service=${encodeURIComponent(service)}` : '';
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/restart${q}`, onChunk, customEndpoint);
+  }
+
+  public async composePull(name: string, onChunk?: (text: string) => void, customEndpoint?: string): Promise<OperationResult> {
+    return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/pull`, onChunk, customEndpoint);
+  }
 }
 
 export const api = new ApiService();
+

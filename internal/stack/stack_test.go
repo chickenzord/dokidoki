@@ -3,6 +3,7 @@ package stack
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -640,6 +641,22 @@ func (m *mockDockerClient) Info(ctx context.Context) (system.Info, error) {
 		return m.infoFn(ctx)
 	}
 	return system.Info{}, nil
+}
+
+func (m *mockDockerClient) RestartContainer(ctx context.Context, id string, timeout *int) error {
+	return nil
+}
+
+func (m *mockDockerClient) StartContainer(ctx context.Context, id string) error {
+	return nil
+}
+
+func (m *mockDockerClient) StopContainer(ctx context.Context, id string, timeout *int) error {
+	return nil
+}
+
+func (m *mockDockerClient) PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("pulled")), nil
 }
 
 func (m *mockDockerClient) Close() error {
@@ -1456,6 +1473,198 @@ func TestService_GetContainerCompose(t *testing.T) {
 		_, err := svc.GetContainerCompose(ctx, "nonexistent")
 		if !errors.Is(err, ErrContainerNotFound) {
 			t.Fatalf("expected ErrContainerNotFound, got %v", err)
+		}
+	})
+}
+
+type mockComposeRunner struct {
+	upFn      func(ctx context.Context, path string, out io.Writer) error
+	downFn    func(ctx context.Context, path string, out io.Writer) error
+	restartFn func(ctx context.Context, path string, service string, out io.Writer) error
+	pullFn    func(ctx context.Context, path string, out io.Writer) error
+}
+
+func (m *mockComposeRunner) Up(ctx context.Context, path string, out io.Writer) error {
+	if m.upFn != nil {
+		return m.upFn(ctx, path, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("up success\n"))
+	}
+	return nil
+}
+
+func (m *mockComposeRunner) Down(ctx context.Context, path string, out io.Writer) error {
+	if m.downFn != nil {
+		return m.downFn(ctx, path, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("down success\n"))
+	}
+	return nil
+}
+
+func (m *mockComposeRunner) Restart(ctx context.Context, path string, service string, out io.Writer) error {
+	if m.restartFn != nil {
+		return m.restartFn(ctx, path, service, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("restart success\n"))
+	}
+	return nil
+}
+
+func (m *mockComposeRunner) Pull(ctx context.Context, path string, out io.Writer) error {
+	if m.pullFn != nil {
+		return m.pullFn(ctx, path, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("pull success\n"))
+	}
+	return nil
+}
+
+func TestService_ContainerOperations(t *testing.T) {
+	ctx := context.Background()
+	selfID := "self-container-123"
+
+	mockDocker := &mockDockerClient{
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			if id == "app-container" {
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{ID: "app-container", Name: "/app"},
+					Config:            &container.Config{Image: "redis:alpine"},
+				}, nil
+			}
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("no such container"))
+		},
+	}
+
+	svc := NewService(nil, mockDocker, selfID)
+
+	t.Run("RestartContainer_SelfSafeguard", func(t *testing.T) {
+		// Attempting restart on self container without force should fail
+		_, err := svc.RestartContainer(ctx, selfID, false)
+		if !errors.Is(err, ErrSelfContainer) {
+			t.Fatalf("expected ErrSelfContainer, got %v", err)
+		}
+
+		// With force should succeed
+		res, err := svc.RestartContainer(ctx, selfID, true)
+		if err != nil {
+			t.Fatalf("expected success with force, got %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("StopContainer_SelfSafeguard", func(t *testing.T) {
+		_, err := svc.StopContainer(ctx, selfID, false)
+		if !errors.Is(err, ErrSelfContainer) {
+			t.Fatalf("expected ErrSelfContainer, got %v", err)
+		}
+
+		res, err := svc.StopContainer(ctx, selfID, true)
+		if err != nil {
+			t.Fatalf("expected success with force, got %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("StartContainer", func(t *testing.T) {
+		res, err := svc.StartContainer(ctx, "app-container")
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("PullContainerImage_Stream", func(t *testing.T) {
+		var out strings.Builder
+		res, err := svc.PullContainerImage(ctx, "app-container", &out)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+		if out.String() != "pulled" {
+			t.Errorf("expected streamed output 'pulled', got %q", out.String())
+		}
+	})
+}
+
+func TestService_ComposeOperations(t *testing.T) {
+	ctx := context.Background()
+	mockDocker := &mockDockerClient{}
+	mockRunner := &mockComposeRunner{}
+
+	svc, tempDir := setupTestService(t, mockDocker, "")
+	svc.composeRunner = mockRunner
+
+	// Create a test stack directory with compose.yaml
+	stackDir := filepath.Join(tempDir, "mystack")
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		t.Fatal(err)
+	}
+	composePath := filepath.Join(stackDir, "compose.yaml")
+	if err := os.WriteFile(composePath, []byte("services:\n  app:\n    image: alpine\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("ComposeUp_Stream", func(t *testing.T) {
+		var out strings.Builder
+		res, err := svc.ComposeUp(ctx, "mystack", &out)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+		if !strings.Contains(out.String(), "up success") {
+			t.Errorf("expected 'up success' in stream, got %q", out.String())
+		}
+	})
+
+	t.Run("ComposeDown", func(t *testing.T) {
+		res, err := svc.ComposeDown(ctx, "mystack", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("ComposeRestart", func(t *testing.T) {
+		res, err := svc.ComposeRestart(ctx, "mystack", "app", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("ComposePull", func(t *testing.T) {
+		res, err := svc.ComposePull(ctx, "mystack", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("StackNotFound", func(t *testing.T) {
+		_, err := svc.ComposeUp(ctx, "unknown-stack", nil)
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("expected ErrNotFound, got %v", err)
 		}
 	})
 }

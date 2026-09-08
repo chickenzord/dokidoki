@@ -9,28 +9,30 @@ import (
 )
 
 const (
-	DefaultBind      = "0.0.0.0"
-	DefaultPort      = 8080
-	DefaultStacksDir = "/opt/stacks"
-	DefaultNodeName  = "dokidoki-node"
-	DefaultLogLevel  = "info"
-	DefaultLogFormat = "text"
+	DefaultBind             = "0.0.0.0"
+	DefaultPort             = 8080
+	DefaultStacksDir        = "/opt/stacks"
+	DefaultDockerComposeBin = "docker compose"
+	DefaultNodeName         = "dokidoki-node"
+	DefaultLogLevel         = "info"
+	DefaultLogFormat        = "text"
 )
 
 // Config holds runtime configuration settings.
 type Config struct {
-	Bind           string
-	Port           int
-	StacksDir      string
-	DockerHost     string
-	NodeID         string
-	NodeName       string
-	AdvertiseAddrs []string
-	Peers          []string
-	ClusterToken   string
-	EnableMDNS     bool
-	LogLevel       string
-	LogFormat      string
+	Bind             string
+	Port             int
+	StacksDir        string
+	DockerHost       string
+	DockerComposeBin string
+	NodeID           string
+	NodeName         string
+	AdvertiseAddrs   []string
+	Peers            []string
+	ClusterToken     string
+	EnableMDNS       bool
+	LogLevel         string
+	LogFormat        string
 }
 
 // Addr returns the host:port string for binding the HTTP server.
@@ -46,13 +48,14 @@ func DefaultConfig() *Config {
 	}
 
 	return &Config{
-		Bind:       DefaultBind,
-		Port:       DefaultPort,
-		StacksDir:  DefaultStacksDir,
-		NodeName:   nodeName,
-		EnableMDNS: true,
-		LogLevel:   DefaultLogLevel,
-		LogFormat:  DefaultLogFormat,
+		Bind:             DefaultBind,
+		Port:             DefaultPort,
+		StacksDir:        DefaultStacksDir,
+		DockerComposeBin: DefaultDockerComposeBin,
+		NodeName:         nodeName,
+		EnableMDNS:       true,
+		LogLevel:         DefaultLogLevel,
+		LogFormat:        DefaultLogFormat,
 	}
 }
 
@@ -92,6 +95,9 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 	}
 	if val, ok := envMap["DOCKER_HOST"]; ok && val != "" {
 		cfg.DockerHost = val
+	}
+	if val, ok := envMap["DOKIDOKI_DOCKER_COMPOSE_BIN"]; ok && strings.TrimSpace(val) != "" {
+		cfg.DockerComposeBin = strings.TrimSpace(val)
 	}
 	if val, ok := envMap["DOKIDOKI_NODE_ID"]; ok && val != "" {
 		cfg.NodeID = strings.TrimSpace(val)
@@ -138,6 +144,7 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 	fs.IntVar(&cfg.Port, "port", cfg.Port, "Port to listen on")
 	fs.StringVar(&cfg.StacksDir, "stacks-dir", cfg.StacksDir, "Directory containing stack definitions")
 	fs.StringVar(&cfg.DockerHost, "docker-host", cfg.DockerHost, "Docker daemon host URL")
+	fs.StringVar(&cfg.DockerComposeBin, "docker-compose-bin", cfg.DockerComposeBin, "Docker compose binary or command")
 	fs.StringVar(&cfg.NodeID, "node-id", cfg.NodeID, "Node unique ID")
 	fs.StringVar(&cfg.NodeName, "node-name", cfg.NodeName, "Node human-readable name")
 

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"github.com/chickenzord/dokidoki/internal/cluster"
+	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/logger"
@@ -66,6 +68,22 @@ func (m *mockDocker) Info(ctx context.Context) (system.Info, error) {
 		return m.infoFn(ctx)
 	}
 	return system.Info{Containers: 2, ContainersRunning: 1, ContainersPaused: 0, ContainersStopped: 1, OperatingSystem: "Linux"}, nil
+}
+
+func (m *mockDocker) RestartContainer(ctx context.Context, id string, timeout *int) error {
+	return nil
+}
+
+func (m *mockDocker) StartContainer(ctx context.Context, id string) error {
+	return nil
+}
+
+func (m *mockDocker) StopContainer(ctx context.Context, id string, timeout *int) error {
+	return nil
+}
+
+func (m *mockDocker) PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error) {
+	return io.NopCloser(strings.NewReader("pulled")), nil
 }
 
 func (m *mockDocker) Close() error {
@@ -1238,6 +1256,271 @@ func TestGetContainerCompose(t *testing.T) {
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for missing container, got %d", w.Code)
 	}
+}
+
+type mockComposeRunner struct {
+	upFn      func(ctx context.Context, path string, out io.Writer) error
+	downFn    func(ctx context.Context, path string, out io.Writer) error
+	restartFn func(ctx context.Context, path string, service string, out io.Writer) error
+	pullFn    func(ctx context.Context, path string, out io.Writer) error
+}
+
+func (m *mockComposeRunner) Up(ctx context.Context, path string, out io.Writer) error {
+	if m.upFn != nil {
+		return m.upFn(ctx, path, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("up streamed output\n"))
+	}
+	return nil
+}
+
+func (m *mockComposeRunner) Down(ctx context.Context, path string, out io.Writer) error {
+	if m.downFn != nil {
+		return m.downFn(ctx, path, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("down streamed output\n"))
+	}
+	return nil
+}
+
+func (m *mockComposeRunner) Restart(ctx context.Context, path string, service string, out io.Writer) error {
+	if m.restartFn != nil {
+		return m.restartFn(ctx, path, service, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("restart streamed output\n"))
+	}
+	return nil
+}
+
+func (m *mockComposeRunner) Pull(ctx context.Context, path string, out io.Writer) error {
+	if m.pullFn != nil {
+		return m.pullFn(ctx, path, out)
+	}
+	if out != nil {
+		_, _ = out.Write([]byte("pull streamed output\n"))
+	}
+	return nil
+}
+
+func setupTestServerWithRunner(t *testing.T, m *mockDocker, runner compose.Runner, selfContainerID string) (http.Handler, string) {
+	tempDir := t.TempDir()
+
+	managedDir := filepath.Join(tempDir, "web-stack")
+	if err := os.MkdirAll(managedDir, 0755); err != nil {
+		t.Fatalf("failed to create stack dir: %v", err)
+	}
+	composeContent := "services:\n  web:\n    image: nginx:latest\n"
+	if err := os.WriteFile(filepath.Join(managedDir, "compose.yaml"), []byte(composeContent), 0644); err != nil {
+		t.Fatalf("failed to write compose.yaml: %v", err)
+	}
+
+	cfg := &config.Config{
+		Bind:      "127.0.0.1",
+		Port:      8080,
+		StacksDir: tempDir,
+	}
+
+	scanner := stack.NewScanner(tempDir)
+	stackSvc := stack.NewService(scanner, m, selfContainerID, stack.WithComposeRunner(runner))
+	server := NewServer(cfg, m, stackSvc, nil, selfContainerID)
+	return server.Routes(), tempDir
+}
+
+func TestContainerOperationHandlers(t *testing.T) {
+	m := &mockDocker{
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			if id == "cid-1" || id == "self-cid" {
+				return types.ContainerJSON{
+					ContainerJSONBase: &types.ContainerJSONBase{ID: id, Name: "/test"},
+					Config:            &container.Config{Image: "nginx:alpine"},
+				}, nil
+			}
+			return types.ContainerJSON{}, errdefs.NotFound(errors.New("no such container"))
+		},
+	}
+	handler, _ := setupTestServerWithSelf(t, m, "self-cid")
+
+	t.Run("RestartContainer_Success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/cid-1/restart", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var res stack.OperationResult
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("RestartContainer_SelfSafeguard", func(t *testing.T) {
+		// Without force: 400 Bad Request
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/self-cid/restart", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for self without force, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// With ?force=true: 200 OK
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/containers/self-cid/restart?force=true", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for self with force, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("StartContainer_Success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/cid-1/start", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("StopContainer_SelfSafeguard", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/self-cid/stop", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 for self without force, got %d", w.Code)
+		}
+
+		req = httptest.NewRequest(http.MethodPost, "/api/v1/containers/self-cid/stop?force=true", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 for self with force, got %d", w.Code)
+		}
+	})
+
+	t.Run("PullContainer_JSON", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/cid-1/pull", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var res stack.OperationResult
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("PullContainer_Streaming", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/cid-1/pull?stream=true", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if !strings.Contains(ct, "text/plain") {
+			t.Errorf("expected Content-Type text/plain, got %s", ct)
+		}
+		if !strings.Contains(w.Body.String(), "pulled") {
+			t.Errorf("expected 'pulled' in stream, got %q", w.Body.String())
+		}
+	})
+}
+
+func TestStackComposeOperationHandlers(t *testing.T) {
+	m := &mockDocker{}
+	runner := &mockComposeRunner{}
+	handler, _ := setupTestServerWithRunner(t, m, runner, "")
+
+	t.Run("ComposeUp_JSON", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/web-stack/up", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var res stack.OperationResult
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("ComposeUp_Streaming", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/web-stack/up?stream=true", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if !strings.Contains(ct, "text/plain") {
+			t.Errorf("expected Content-Type text/plain, got %s", ct)
+		}
+		if !strings.Contains(w.Body.String(), "up streamed output") {
+			t.Errorf("expected 'up streamed output' in stream, got %q", w.Body.String())
+		}
+	})
+
+	t.Run("ComposeDown_Success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/web-stack/down", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("ComposeRestart_WithService", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/web-stack/restart?service=web", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("ComposePull_Success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/web-stack/pull", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("NotFound", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks/nonexistent-stack/up", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404 for missing stack, got %d", w.Code)
+		}
+	})
 }
 
 

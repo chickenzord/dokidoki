@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"io"
 
 	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/docker"
@@ -20,6 +21,14 @@ type StackService interface {
 	GetStackFile(ctx context.Context, name, filename string) (*stack.StackFile, error)
 	CreateOrImportStack(ctx context.Context, req stack.CreateStackRequest) (*stack.Summary, error)
 	GetContainerCompose(ctx context.Context, id string) (*stack.ContainerComposeResponse, error)
+	RestartContainer(ctx context.Context, id string, force bool) (*stack.OperationResult, error)
+	StartContainer(ctx context.Context, id string) (*stack.OperationResult, error)
+	StopContainer(ctx context.Context, id string, force bool) (*stack.OperationResult, error)
+	PullContainerImage(ctx context.Context, id string, out io.Writer) (*stack.OperationResult, error)
+	ComposeUp(ctx context.Context, stackName string, out io.Writer) (*stack.OperationResult, error)
+	ComposeDown(ctx context.Context, stackName string, out io.Writer) (*stack.OperationResult, error)
+	ComposeRestart(ctx context.Context, stackName string, service string, out io.Writer) (*stack.OperationResult, error)
+	ComposePull(ctx context.Context, stackName string, out io.Writer) (*stack.OperationResult, error)
 }
 
 // ClusterService defines the cluster coordination operations required by the API.

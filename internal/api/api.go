@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"net/http"
+	"strings"
 
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
@@ -74,11 +75,19 @@ func (s *Server) Routes() http.Handler {
 		r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
 		r.Get("/stacks/{name}/files", s.handleGetStackFiles)
 		r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
+		r.Post("/stacks/{name}/up", s.handleComposeUp)
+		r.Post("/stacks/{name}/down", s.handleComposeDown)
+		r.Post("/stacks/{name}/restart", s.handleComposeRestart)
+		r.Post("/stacks/{name}/pull", s.handleComposePull)
 
 		// Containers routes
 		r.Get("/containers", s.handleListContainers)
 		r.Get("/containers/{id}", s.handleInspectContainer)
 		r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
+		r.Post("/containers/{id}/restart", s.handleRestartContainer)
+		r.Post("/containers/{id}/start", s.handleStartContainer)
+		r.Post("/containers/{id}/stop", s.handleStopContainer)
+		r.Post("/containers/{id}/pull", s.handlePullContainer)
 
 		// Host routes
 		r.Get("/host", s.handleHostInfo)
@@ -107,4 +116,25 @@ func writeJSON(w http.ResponseWriter, status int, data any) {
 
 func writeError(w http.ResponseWriter, status int, msg string) {
 	writeJSON(w, status, map[string]string{"error": msg})
+}
+
+func isStreamRequested(r *http.Request) bool {
+	if r.URL.Query().Get("stream") == "true" {
+		return true
+	}
+	accept := r.Header.Get("Accept")
+	return strings.Contains(accept, "text/plain") || strings.Contains(accept, "text/event-stream")
+}
+
+type flushWriter struct {
+	w http.ResponseWriter
+	f http.Flusher
+}
+
+func (fw *flushWriter) Write(p []byte) (int, error) {
+	n, err := fw.w.Write(p)
+	if fw.f != nil {
+		fw.f.Flush()
+	}
+	return n, err
 }

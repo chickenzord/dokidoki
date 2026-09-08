@@ -23,6 +23,9 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DockerHost != "" {
 		t.Errorf("expected empty DockerHost, got %s", cfg.DockerHost)
 	}
+	if cfg.DockerComposeBin != "docker compose" {
+		t.Errorf("expected DockerComposeBin \"docker compose\", got %s", cfg.DockerComposeBin)
+	}
 	if cfg.NodeID != "" {
 		t.Errorf("expected empty NodeID, got %s", cfg.NodeID)
 	}
@@ -58,6 +61,7 @@ func TestEnvOverride(t *testing.T) {
 		"DOKIDOKI_PORT=9090",
 		"DOKIDOKI_STACKS_DIR=/custom/stacks",
 		"DOCKER_HOST=tcp://1.2.3.4:2375",
+		"DOKIDOKI_DOCKER_COMPOSE_BIN=docker-compose",
 		"DOKIDOKI_NODE_ID=custom-node-id",
 		"DOKIDOKI_NODE_NAME=my-custom-node",
 		"DOKIDOKI_ADVERTISE_ADDR=http://10.0.0.1:8080, http://10.0.0.2:8080",
@@ -83,6 +87,9 @@ func TestEnvOverride(t *testing.T) {
 	}
 	if cfg.DockerHost != "tcp://1.2.3.4:2375" {
 		t.Errorf("expected DockerHost tcp://1.2.3.4:2375, got %s", cfg.DockerHost)
+	}
+	if cfg.DockerComposeBin != "docker-compose" {
+		t.Errorf("expected DockerComposeBin docker-compose, got %s", cfg.DockerComposeBin)
 	}
 	if cfg.NodeID != "custom-node-id" {
 		t.Errorf("expected NodeID custom-node-id, got %s", cfg.NodeID)
@@ -115,6 +122,7 @@ func TestFlagsOverrideEnv(t *testing.T) {
 		"DOKIDOKI_PORT=9090",
 		"DOKIDOKI_STACKS_DIR=/custom/stacks",
 		"DOCKER_HOST=tcp://1.2.3.4:2375",
+		"DOKIDOKI_DOCKER_COMPOSE_BIN=env-docker-compose",
 		"DOKIDOKI_NODE_ID=env-node-id",
 		"DOKIDOKI_NODE_NAME=env-node-name",
 		"DOKIDOKI_ADVERTISE_ADDR=http://env-addr:8080",
@@ -129,6 +137,7 @@ func TestFlagsOverrideEnv(t *testing.T) {
 		"-port=9999",
 		"-stacks-dir=/flag/stacks",
 		"-docker-host=unix:///tmp/docker.sock",
+		"-docker-compose-bin=/usr/local/bin/docker-compose",
 		"-node-id=flag-node-id",
 		"-node-name=flag-node-name",
 		"-advertise-addr=http://flag-addr:8080,http://flag-addr-2:8080",
@@ -154,6 +163,9 @@ func TestFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.DockerHost != "unix:///tmp/docker.sock" {
 		t.Errorf("expected DockerHost unix:///tmp/docker.sock, got %s", cfg.DockerHost)
+	}
+	if cfg.DockerComposeBin != "/usr/local/bin/docker-compose" {
+		t.Errorf("expected DockerComposeBin /usr/local/bin/docker-compose, got %s", cfg.DockerComposeBin)
 	}
 	if cfg.NodeID != "flag-node-id" {
 		t.Errorf("expected NodeID flag-node-id, got %s", cfg.NodeID)

@@ -107,3 +107,10 @@ type ContainerComposeResponse struct {
 	Content   string `json:"content"`
 }
 
+// OperationResult represents the outcome of a container or compose operation.
+type OperationResult struct {
+	Success bool   `json:"success"`
+	Message string `json:"message"`
+	Output  string `json:"output,omitempty"`
+}
+

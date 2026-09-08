@@ -45,7 +45,7 @@ RUN CGO_ENABLED=0 go build \
 
 # Stage 3: Runner
 FROM alpine:3.21 AS runner
-RUN apk add --no-cache ca-certificates tzdata curl
+RUN apk add --no-cache ca-certificates tzdata curl docker-cli docker-cli-compose
 
 WORKDIR /app
 

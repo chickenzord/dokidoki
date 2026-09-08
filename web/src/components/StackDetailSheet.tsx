@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ClusterStack } from '../types';
 import { useStackFilesQuery, useStackContainersQuery } from '../hooks/useClusterData';
+import { api } from '../services/api';
 import {
   Sheet,
   SheetContent,
@@ -11,6 +13,7 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { ImportStackDialog } from './ImportStackDialog';
+import { OperationLogModal } from './OperationLogModal';
 import {
   Server,
   Layers,
@@ -22,6 +25,10 @@ import {
   Box,
   ArrowUpRight,
   HardDrive,
+  Play,
+  Square,
+  RotateCw,
+  AlertTriangle,
 } from 'lucide-react';
 
 interface StackDetailSheetProps {
@@ -37,8 +44,18 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   onClose,
   onSelectContainer,
 }) => {
+  const queryClient = useQueryClient();
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
+
+  // Streaming log modal states
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [logTitle, setLogTitle] = useState('');
+  const [logSubtitle, setLogSubtitle] = useState('');
+  const [logOutput, setLogOutput] = useState('');
+  const [logRunning, setLogRunning] = useState(false);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [logSuccess, setLogSuccess] = useState(false);
 
   const hostEndpoint = stack?.hostEndpoint || '';
   const stackName = stack?.name || '';
@@ -63,6 +80,135 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
 
   const files = filesData?.files || [];
   const defaultFile = files.find((f) => f.isCompose)?.name || files[0]?.name || '';
+
+  const invalidateStackData = () => {
+    queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
+    queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
+    queryClient.invalidateQueries({ queryKey: ['stack-containers', hostEndpoint, stackName] });
+    queryClient.invalidateQueries({ queryKey: ['stack-files', hostEndpoint, stackName] });
+  };
+
+  const handleComposeUp = async () => {
+    setLogTitle(`Compose Up: ${stack.name}`);
+    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose up -d --remove-orphans`);
+    setLogOutput('');
+    setLogError(null);
+    setLogSuccess(false);
+    setLogRunning(true);
+    setLogModalOpen(true);
+
+    try {
+      await api.composeUp(
+        stack.name,
+        (chunk) => {
+          setLogOutput((prev) => prev + chunk);
+        },
+        hostEndpoint
+      );
+      setLogSuccess(true);
+      invalidateStackData();
+    } catch (err: any) {
+      setLogError(err.message || 'Failed to run compose up');
+    } finally {
+      setLogRunning(false);
+    }
+  };
+
+  const handleComposeDown = async () => {
+    if (stack.is_self) {
+      if (!window.confirm('Warning: This stack contains Dokidoki itself. Stopping it will shut down the server. Continue?')) {
+        return;
+      }
+    } else {
+      if (!window.confirm(`Are you sure you want to run compose down on stack "${stack.name}"? This will stop and remove its containers.`)) {
+        return;
+      }
+    }
+
+    setLogTitle(`Compose Down: ${stack.name}`);
+    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose down`);
+    setLogOutput('');
+    setLogError(null);
+    setLogSuccess(false);
+    setLogRunning(true);
+    setLogModalOpen(true);
+
+    try {
+      await api.composeDown(
+        stack.name,
+        (chunk) => {
+          setLogOutput((prev) => prev + chunk);
+        },
+        hostEndpoint
+      );
+      setLogSuccess(true);
+      invalidateStackData();
+    } catch (err: any) {
+      setLogError(err.message || 'Failed to run compose down');
+    } finally {
+      setLogRunning(false);
+    }
+  };
+
+  const handleComposeRestart = async (service?: string) => {
+    if (stack.is_self) {
+      if (!window.confirm('Warning: This stack contains Dokidoki itself. Restarting it may interrupt your connection. Continue?')) {
+        return;
+      }
+    }
+
+    const titleSuffix = service ? ` (service: ${service})` : '';
+    setLogTitle(`Compose Restart: ${stack.name}${titleSuffix}`);
+    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose restart ${service || ''}`.trim());
+    setLogOutput('');
+    setLogError(null);
+    setLogSuccess(false);
+    setLogRunning(true);
+    setLogModalOpen(true);
+
+    try {
+      await api.composeRestart(
+        stack.name,
+        service,
+        (chunk) => {
+          setLogOutput((prev) => prev + chunk);
+        },
+        hostEndpoint
+      );
+      setLogSuccess(true);
+      invalidateStackData();
+    } catch (err: any) {
+      setLogError(err.message || 'Failed to restart compose stack');
+    } finally {
+      setLogRunning(false);
+    }
+  };
+
+  const handleComposePull = async () => {
+    setLogTitle(`Compose Pull: ${stack.name}`);
+    setLogSubtitle(`Host: ${stack.hostName} | Command: docker compose pull`);
+    setLogOutput('');
+    setLogError(null);
+    setLogSuccess(false);
+    setLogRunning(true);
+    setLogModalOpen(true);
+
+    try {
+      await api.composePull(
+        stack.name,
+        (chunk) => {
+          setLogOutput((prev) => prev + chunk);
+        },
+        hostEndpoint
+      );
+      setLogSuccess(true);
+      invalidateStackData();
+    } catch (err: any) {
+      setLogError(err.message || 'Failed to pull compose images');
+    } finally {
+      setLogRunning(false);
+    }
+  };
 
   return (
     <>
@@ -102,11 +248,19 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 {stack.hostName}
               </Badge>
 
-              <span className="text-slate-600">•</span>
+              <Badge
+                variant="outline"
+                className="bg-slate-800 text-slate-300 border-slate-700 font-mono text-[11px]"
+              >
+                {stack.rollup.running}/{stack.rollup.total} running
+              </Badge>
 
-              <span className="font-mono text-slate-300">
-                {stack.rollup.running}/{stack.rollup.total} containers running
-              </span>
+              {stack.is_self && (
+                <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3 text-amber-400" />
+                  Self Stack
+                </Badge>
+              )}
 
               {stack.composePath && (
                 <>
@@ -116,6 +270,49 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                   </span>
                 </>
               )}
+            </div>
+
+            {/* Compose Actions Toolbar */}
+            <div className="flex flex-wrap items-center gap-2 pt-3">
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleComposeUp}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+              >
+                <Play className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
+                Up
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => handleComposeRestart()}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+              >
+                <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                Restart
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleComposePull}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+                Pull
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={handleComposeDown}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+              >
+                <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
+                Down
+              </Button>
             </div>
           </SheetHeader>
 
@@ -190,6 +387,22 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                                 )}
                               </div>
                             )}
+
+                            {container.service && (
+                              <Button
+                                size="icon"
+                                variant="ghost"
+                                title={`Restart service ${container.service}`}
+                                className="h-7 w-7 text-slate-400 hover:text-amber-400 hover:bg-slate-800"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleComposeRestart(container.service);
+                                }}
+                              >
+                                <RotateCw className="w-3.5 h-3.5" />
+                              </Button>
+                            )}
+
                             <ArrowUpRight className="w-3.5 h-3.5 text-slate-500 group-hover:text-slate-300 transition-colors" />
                           </div>
                         </div>
@@ -295,6 +508,17 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
         isOpen={importDialogOpen}
         onClose={() => setImportDialogOpen(false)}
         stack={stack}
+      />
+
+      <OperationLogModal
+        isOpen={logModalOpen}
+        onClose={() => setLogModalOpen(false)}
+        title={logTitle}
+        subtitle={logSubtitle}
+        output={logOutput}
+        isRunning={logRunning}
+        error={logError}
+        success={logSuccess}
       />
     </>
   );

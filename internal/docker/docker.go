@@ -2,9 +2,11 @@ package docker
 
 import (
 	"context"
+	"io"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
 )
@@ -14,6 +16,10 @@ type Client interface {
 	Ping(ctx context.Context) (types.Ping, error)
 	ListContainers(ctx context.Context) ([]types.Container, error)
 	InspectContainer(ctx context.Context, id string) (types.ContainerJSON, error)
+	RestartContainer(ctx context.Context, id string, timeout *int) error
+	StartContainer(ctx context.Context, id string) error
+	StopContainer(ctx context.Context, id string, timeout *int) error
+	PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error)
 	ServerVersion(ctx context.Context) (types.Version, error)
 	Info(ctx context.Context) (system.Info, error)
 	Close() error
@@ -66,6 +72,26 @@ func (c *ClientWrapper) ListContainers(ctx context.Context) ([]types.Container, 
 // InspectContainer returns low-level information about a container.
 func (c *ClientWrapper) InspectContainer(ctx context.Context, id string) (types.ContainerJSON, error) {
 	return c.cli.ContainerInspect(ctx, id)
+}
+
+// RestartContainer stops and starts a container again.
+func (c *ClientWrapper) RestartContainer(ctx context.Context, id string, timeout *int) error {
+	return c.cli.ContainerRestart(ctx, id, container.StopOptions{Timeout: timeout})
+}
+
+// StartContainer starts a container.
+func (c *ClientWrapper) StartContainer(ctx context.Context, id string) error {
+	return c.cli.ContainerStart(ctx, id, container.StartOptions{})
+}
+
+// StopContainer stops a container.
+func (c *ClientWrapper) StopContainer(ctx context.Context, id string, timeout *int) error {
+	return c.cli.ContainerStop(ctx, id, container.StopOptions{Timeout: timeout})
+}
+
+// PullImage requests the docker host to pull an image from a remote registry.
+func (c *ClientWrapper) PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error) {
+	return c.cli.ImagePull(ctx, imageRef, image.PullOptions{})
 }
 
 // ServerVersion returns information about the Docker server version.

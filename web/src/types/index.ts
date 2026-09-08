@@ -176,3 +176,9 @@ export interface EnrichedContainerInspect {
   source?: string;
   is_self?: boolean;
 }
+
+export interface OperationResult {
+  success: boolean;
+  message: string;
+  output?: string;
+}

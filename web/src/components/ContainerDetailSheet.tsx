@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
+import { useQueryClient } from '@tanstack/react-query';
 import { ClusterContainer } from '../types';
 import { useContainerInspectQuery } from '../hooks/useClusterData';
+import { api } from '../services/api';
 import {
   Sheet,
   SheetContent,
@@ -10,6 +12,7 @@ import {
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { GenerateComposeDialog } from './GenerateComposeDialog';
+import { OperationLogModal } from './OperationLogModal';
 import {
   Server,
   Box,
@@ -25,6 +28,12 @@ import {
   Copy,
   Check,
   Loader2,
+  Play,
+  Square,
+  RotateCw,
+  Download,
+  AlertTriangle,
+  XCircle,
 } from 'lucide-react';
 
 interface ContainerDetailSheetProps {
@@ -38,9 +47,23 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
   isOpen,
   onClose,
 }) => {
+  const queryClient = useQueryClient();
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
   const [rawInspectOpen, setRawInspectOpen] = useState(false);
   const [copiedInspect, setCopiedInspect] = useState(false);
+
+  // Action states
+  const [actionLoading, setActionLoading] = useState<'start' | 'stop' | 'restart' | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
+
+  // Streaming log modal states
+  const [logModalOpen, setLogModalOpen] = useState(false);
+  const [logTitle, setLogTitle] = useState('');
+  const [logSubtitle, setLogSubtitle] = useState('');
+  const [logOutput, setLogOutput] = useState('');
+  const [logRunning, setLogRunning] = useState(false);
+  const [logError, setLogError] = useState<string | null>(null);
+  const [logSuccess, setLogSuccess] = useState(false);
 
   const hostEndpoint = container?.hostEndpoint || '';
   const containerId = container?.id || '';
@@ -69,6 +92,90 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
     navigator.clipboard.writeText(JSON.stringify(inspectData, null, 2));
     setCopiedInspect(true);
     setTimeout(() => setCopiedInspect(false), 2000);
+  };
+
+  const invalidateContainerData = () => {
+    queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
+    queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
+    queryClient.invalidateQueries({ queryKey: ['container-inspect', hostEndpoint, containerId] });
+    if (container.stack) {
+      queryClient.invalidateQueries({ queryKey: ['stack-containers', hostEndpoint, container.stack] });
+    }
+  };
+
+  const handleStart = async () => {
+    setActionLoading('start');
+    setActionError(null);
+    try {
+      await api.startContainer(container.id, hostEndpoint);
+      invalidateContainerData();
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to start container');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleStop = async (force = false) => {
+    if (container.is_self && !force) {
+      if (!window.confirm('Warning: Dokidoki is running inside this container. Stopping it will shut down the Dokidoki server. Continue?')) {
+        return;
+      }
+    }
+    setActionLoading('stop');
+    setActionError(null);
+    try {
+      await api.stopContainer(container.id, force || Boolean(container.is_self), hostEndpoint);
+      invalidateContainerData();
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to stop container');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handleRestart = async (force = false) => {
+    if (container.is_self && !force) {
+      if (!window.confirm('Warning: Dokidoki is running inside this container. Restarting it will interrupt your current connection. Continue?')) {
+        return;
+      }
+    }
+    setActionLoading('restart');
+    setActionError(null);
+    try {
+      await api.restartContainer(container.id, force || Boolean(container.is_self), hostEndpoint);
+      invalidateContainerData();
+    } catch (err: any) {
+      setActionError(err.message || 'Failed to restart container');
+    } finally {
+      setActionLoading(null);
+    }
+  };
+
+  const handlePull = async () => {
+    setLogTitle(`Pull Image`);
+    setLogSubtitle(`${container.image} on ${container.hostName}`);
+    setLogOutput('');
+    setLogError(null);
+    setLogSuccess(false);
+    setLogRunning(true);
+    setLogModalOpen(true);
+
+    try {
+      await api.pullContainer(
+        container.id,
+        (chunk) => {
+          setLogOutput((prev) => prev + chunk);
+        },
+        hostEndpoint
+      );
+      setLogSuccess(true);
+      invalidateContainerData();
+    } catch (err: any) {
+      setLogError(err.message || 'Failed to pull container image');
+    } finally {
+      setLogRunning(false);
+    }
   };
 
   return (
@@ -121,12 +228,97 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                 {container.state}
               </Badge>
 
+              {container.is_self && (
+                <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
+                  <AlertTriangle className="w-3 h-3 text-amber-400" />
+                  Self
+                </Badge>
+              )}
+
               <span className="text-slate-600">•</span>
 
               <span className="font-mono text-slate-400 text-[11px] truncate max-w-xs" title={container.id}>
                 {container.id.substring(0, 12)}
               </span>
             </div>
+
+            {/* Action Bar */}
+            <div className="flex flex-wrap items-center gap-2 pt-3">
+              {isRunning ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={Boolean(actionLoading)}
+                  onClick={() => handleStop()}
+                  className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+                >
+                  {actionLoading === 'stop' ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
+                  )}
+                  Stop
+                </Button>
+              ) : (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={Boolean(actionLoading)}
+                  onClick={handleStart}
+                  className="h-8 text-xs bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 border-emerald-800/60 transition-colors"
+                >
+                  {actionLoading === 'start' ? (
+                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5 mr-1.5" />
+                  )}
+                  Start
+                </Button>
+              )}
+
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={Boolean(actionLoading)}
+                onClick={() => handleRestart()}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+              >
+                {actionLoading === 'restart' ? (
+                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                ) : (
+                  <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                )}
+                Restart
+              </Button>
+
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={Boolean(actionLoading)}
+                onClick={handlePull}
+                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+              >
+                <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+                Pull Image
+              </Button>
+            </div>
+
+            {actionError && (
+              <div className="p-2.5 bg-rose-950/30 border border-rose-800/50 rounded-lg text-rose-300 text-xs flex items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+                  <span className="font-mono">{actionError}</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setActionError(null)}
+                  className="h-6 px-2 text-xs text-rose-400 hover:text-white"
+                >
+                  Dismiss
+                </Button>
+              </div>
+            )}
           </SheetHeader>
 
           <div className="space-y-6 py-4">
@@ -343,6 +535,17 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
         isOpen={generateDialogOpen}
         onClose={() => setGenerateDialogOpen(false)}
         container={container}
+      />
+
+      <OperationLogModal
+        isOpen={logModalOpen}
+        onClose={() => setLogModalOpen(false)}
+        title={logTitle}
+        subtitle={logSubtitle}
+        output={logOutput}
+        isRunning={logRunning}
+        error={logError}
+        success={logSuccess}
       />
     </>
   );

@@ -3,6 +3,7 @@ package api
 import (
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -221,5 +222,186 @@ func (s *Server) handleGetStackFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, file)
+}
+
+// handleComposeUp handles POST /api/v1/stacks/{name}/up.
+// Supports ?stream=true or Accept: text/plain to stream output live.
+func (s *Server) handleComposeUp(w http.ResponseWriter, r *http.Request) {
+	if s.stackSvc == nil {
+		writeError(w, http.StatusNotFound, "stack not found")
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+
+	if isStreamRequested(r) {
+		flusher, ok := w.(http.Flusher)
+		if ok {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+			flusher.Flush()
+
+			fw := &flushWriter{w: w, f: flusher}
+			_, err := s.stackSvc.ComposeUp(r.Context(), name, fw)
+			if err != nil {
+				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
+			}
+			return
+		}
+	}
+
+	res, err := s.stackSvc.ComposeUp(r.Context(), name, nil)
+	if err != nil {
+		if errors.Is(err, stack.ErrNotFound) || errors.Is(err, stack.ErrComposeNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not accessible") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to bring up stack: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleComposeDown handles POST /api/v1/stacks/{name}/down.
+// Supports ?stream=true or Accept: text/plain to stream output live.
+func (s *Server) handleComposeDown(w http.ResponseWriter, r *http.Request) {
+	if s.stackSvc == nil {
+		writeError(w, http.StatusNotFound, "stack not found")
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+
+	if isStreamRequested(r) {
+		flusher, ok := w.(http.Flusher)
+		if ok {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+			flusher.Flush()
+
+			fw := &flushWriter{w: w, f: flusher}
+			_, err := s.stackSvc.ComposeDown(r.Context(), name, fw)
+			if err != nil {
+				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
+			}
+			return
+		}
+	}
+
+	res, err := s.stackSvc.ComposeDown(r.Context(), name, nil)
+	if err != nil {
+		if errors.Is(err, stack.ErrNotFound) || errors.Is(err, stack.ErrComposeNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not accessible") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to bring down stack: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleComposeRestart handles POST /api/v1/stacks/{name}/restart.
+// Supports ?service={service} and ?stream=true.
+func (s *Server) handleComposeRestart(w http.ResponseWriter, r *http.Request) {
+	if s.stackSvc == nil {
+		writeError(w, http.StatusNotFound, "stack not found")
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+	service := r.URL.Query().Get("service")
+
+	if isStreamRequested(r) {
+		flusher, ok := w.(http.Flusher)
+		if ok {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+			flusher.Flush()
+
+			fw := &flushWriter{w: w, f: flusher}
+			_, err := s.stackSvc.ComposeRestart(r.Context(), name, service, fw)
+			if err != nil {
+				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
+			}
+			return
+		}
+	}
+
+	res, err := s.stackSvc.ComposeRestart(r.Context(), name, service, nil)
+	if err != nil {
+		if errors.Is(err, stack.ErrNotFound) || errors.Is(err, stack.ErrComposeNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not accessible") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to restart stack: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
+}
+
+// handleComposePull handles POST /api/v1/stacks/{name}/pull.
+// Supports ?stream=true or Accept: text/plain.
+func (s *Server) handleComposePull(w http.ResponseWriter, r *http.Request) {
+	if s.stackSvc == nil {
+		writeError(w, http.StatusNotFound, "stack not found")
+		return
+	}
+
+	name := chi.URLParam(r, "name")
+
+	if isStreamRequested(r) {
+		flusher, ok := w.(http.Flusher)
+		if ok {
+			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+			w.Header().Set("X-Content-Type-Options", "nosniff")
+			w.Header().Set("Cache-Control", "no-cache")
+			w.WriteHeader(http.StatusOK)
+			flusher.Flush()
+
+			fw := &flushWriter{w: w, f: flusher}
+			_, err := s.stackSvc.ComposePull(r.Context(), name, fw)
+			if err != nil {
+				_, _ = fmt.Fprintf(fw, "\nError: %v\n", err)
+			}
+			return
+		}
+	}
+
+	res, err := s.stackSvc.ComposePull(r.Context(), name, nil)
+	if err != nil {
+		if errors.Is(err, stack.ErrNotFound) || errors.Is(err, stack.ErrComposeNotFound) {
+			writeError(w, http.StatusNotFound, err.Error())
+			return
+		}
+		if strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "not accessible") {
+			writeError(w, http.StatusBadRequest, err.Error())
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to pull stack images: "+err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusOK, res)
 }
 

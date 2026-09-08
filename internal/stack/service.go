@@ -1,15 +1,18 @@
 package stack
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"sort"
 	"strings"
 	"unicode/utf8"
 
+	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/client"
@@ -28,22 +31,47 @@ var (
 
 	// ErrInvalidSource is returned when an invalid source filter is requested.
 	ErrInvalidSource = errors.New("invalid source parameter, must be managed, external, or all")
+
+	// ErrSelfContainer is returned when mutating dokidoki's own container without force.
+	ErrSelfContainer = errors.New("cannot perform operation on Dokidoki's own container without force")
 )
+
+// ServiceOption configures a Service instance.
+type ServiceOption func(*Service)
+
+// WithComposeRunner sets the compose runner for the service.
+func WithComposeRunner(runner compose.Runner) ServiceOption {
+	return func(s *Service) {
+		s.composeRunner = runner
+	}
+}
 
 // Service provides domain logic for managing stacks and containers.
 type Service struct {
 	scanner         *Scanner
 	dockerCli       docker.Client
+	composeRunner   compose.Runner
 	selfContainerID string
 }
 
 // NewService creates a new stack domain Service.
-func NewService(scanner *Scanner, dockerCli docker.Client, selfContainerID string) *Service {
-	return &Service{
+func NewService(scanner *Scanner, dockerCli docker.Client, selfContainerID string, opts ...ServiceOption) *Service {
+	s := &Service{
 		scanner:         scanner,
 		dockerCli:       dockerCli,
 		selfContainerID: selfContainerID,
 	}
+	for _, opt := range opts {
+		opt(s)
+	}
+	return s
+}
+
+func (s *Service) getComposeRunner() compose.Runner {
+	if s.composeRunner != nil {
+		return s.composeRunner
+	}
+	return compose.NewRunner("", "")
 }
 
 func (s *Service) getCategorized(ctx context.Context) (*CategorizedResult, []types.Container, error) {
@@ -750,5 +778,256 @@ func (s *Service) GetContainerCompose(ctx context.Context, id string) (*Containe
 	return &ContainerComposeResponse{
 		StackName: stackName,
 		Content:   string(yamlData),
+	}, nil
+}
+
+// RestartContainer restarts a container by ID, with self-protection safeguard unless force is true.
+func (s *Service) RestartContainer(ctx context.Context, id string, force bool) (*OperationResult, error) {
+	if s.dockerCli == nil {
+		return nil, ErrContainerNotFound
+	}
+	if docker.IsSelfContainer(id, s.selfContainerID) && !force {
+		return nil, ErrSelfContainer
+	}
+
+	if err := s.dockerCli.RestartContainer(ctx, id, nil); err != nil {
+		if client.IsErrNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "no such container") {
+			return nil, ErrContainerNotFound
+		}
+		return nil, fmt.Errorf("failed to restart container: %w", err)
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("container %s restarted successfully", id),
+	}, nil
+}
+
+// StartContainer starts a container by ID.
+func (s *Service) StartContainer(ctx context.Context, id string) (*OperationResult, error) {
+	if s.dockerCli == nil {
+		return nil, ErrContainerNotFound
+	}
+
+	if err := s.dockerCli.StartContainer(ctx, id); err != nil {
+		if client.IsErrNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "no such container") {
+			return nil, ErrContainerNotFound
+		}
+		return nil, fmt.Errorf("failed to start container: %w", err)
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("container %s started successfully", id),
+	}, nil
+}
+
+// StopContainer stops a container by ID, with self-protection safeguard unless force is true.
+func (s *Service) StopContainer(ctx context.Context, id string, force bool) (*OperationResult, error) {
+	if s.dockerCli == nil {
+		return nil, ErrContainerNotFound
+	}
+	if docker.IsSelfContainer(id, s.selfContainerID) && !force {
+		return nil, ErrSelfContainer
+	}
+
+	if err := s.dockerCli.StopContainer(ctx, id, nil); err != nil {
+		if client.IsErrNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "no such container") {
+			return nil, ErrContainerNotFound
+		}
+		return nil, fmt.Errorf("failed to stop container: %w", err)
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("container %s stopped successfully", id),
+	}, nil
+}
+
+// PullContainerImage pulls the latest image used by a container, streaming progress to out if non-nil.
+func (s *Service) PullContainerImage(ctx context.Context, id string, out io.Writer) (*OperationResult, error) {
+	if s.dockerCli == nil {
+		return nil, ErrContainerNotFound
+	}
+
+	inspect, err := s.dockerCli.InspectContainer(ctx, id)
+	if err != nil {
+		if client.IsErrNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "no such container") {
+			return nil, ErrContainerNotFound
+		}
+		return nil, fmt.Errorf("failed to inspect container: %w", err)
+	}
+
+	if inspect.Config == nil || strings.TrimSpace(inspect.Config.Image) == "" {
+		return nil, errors.New("container has no image defined")
+	}
+
+	imageRef := inspect.Config.Image
+	rc, err := s.dockerCli.PullImage(ctx, imageRef)
+	if err != nil {
+		return nil, fmt.Errorf("failed to pull image %s: %w", imageRef, err)
+	}
+	if rc == nil {
+		return &OperationResult{
+			Success: true,
+			Message: fmt.Sprintf("pulled image %s", imageRef),
+		}, nil
+	}
+	defer rc.Close()
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	if out != nil {
+		writer = io.MultiWriter(out, &buf)
+	}
+
+	if _, err := io.Copy(writer, rc); err != nil {
+		return nil, fmt.Errorf("error reading pull response stream: %w", err)
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("successfully pulled image %s", imageRef),
+		Output:  buf.String(),
+	}, nil
+}
+
+// resolveComposeFile finds and validates the compose file for the given stack.
+func (s *Service) resolveComposeFile(ctx context.Context, name string) (string, error) {
+	cleanName := filepath.Clean(strings.TrimSpace(name))
+	if cleanName == "" || cleanName == "." || filepath.IsAbs(cleanName) || strings.HasPrefix(cleanName, "..") {
+		return "", errors.New("invalid stack name: path traversal detected")
+	}
+
+	categorized, _, err := s.getCategorized(ctx)
+	if err != nil {
+		return "", err
+	}
+
+	detail, found := categorized.GetStack(cleanName)
+	if !found {
+		return "", ErrNotFound
+	}
+
+	if !detail.ComposePresent || detail.ComposePath == "" {
+		return "", ErrComposeNotFound
+	}
+
+	fi, err := os.Stat(detail.ComposePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", fmt.Errorf("compose file %q not found or not accessible on this host mount", detail.ComposePath)
+		}
+		return "", fmt.Errorf("failed to access compose file %q: %w", detail.ComposePath, err)
+	}
+	if fi.IsDir() {
+		return "", fmt.Errorf("compose path %q is a directory, not a file", detail.ComposePath)
+	}
+
+	return detail.ComposePath, nil
+}
+
+// ComposeUp executes `docker compose up -d --remove-orphans` on the given stack.
+func (s *Service) ComposeUp(ctx context.Context, stackName string, out io.Writer) (*OperationResult, error) {
+	composePath, err := s.resolveComposeFile(ctx, stackName)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	if out != nil {
+		writer = io.MultiWriter(out, &buf)
+	}
+
+	runner := s.getComposeRunner()
+	if err := runner.Up(ctx, composePath, writer); err != nil {
+		return nil, err
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("stack %s brought up successfully", stackName),
+		Output:  buf.String(),
+	}, nil
+}
+
+// ComposeDown executes `docker compose down` on the given stack.
+func (s *Service) ComposeDown(ctx context.Context, stackName string, out io.Writer) (*OperationResult, error) {
+	composePath, err := s.resolveComposeFile(ctx, stackName)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	if out != nil {
+		writer = io.MultiWriter(out, &buf)
+	}
+
+	runner := s.getComposeRunner()
+	if err := runner.Down(ctx, composePath, writer); err != nil {
+		return nil, err
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("stack %s brought down successfully", stackName),
+		Output:  buf.String(),
+	}, nil
+}
+
+// ComposeRestart executes `docker compose restart [service]` on the given stack.
+func (s *Service) ComposeRestart(ctx context.Context, stackName string, service string, out io.Writer) (*OperationResult, error) {
+	composePath, err := s.resolveComposeFile(ctx, stackName)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	if out != nil {
+		writer = io.MultiWriter(out, &buf)
+	}
+
+	runner := s.getComposeRunner()
+	if err := runner.Restart(ctx, composePath, service, writer); err != nil {
+		return nil, err
+	}
+
+	msg := fmt.Sprintf("stack %s restarted successfully", stackName)
+	if service != "" {
+		msg = fmt.Sprintf("service %s in stack %s restarted successfully", service, stackName)
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: msg,
+		Output:  buf.String(),
+	}, nil
+}
+
+// ComposePull executes `docker compose pull` on the given stack.
+func (s *Service) ComposePull(ctx context.Context, stackName string, out io.Writer) (*OperationResult, error) {
+	composePath, err := s.resolveComposeFile(ctx, stackName)
+	if err != nil {
+		return nil, err
+	}
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	if out != nil {
+		writer = io.MultiWriter(out, &buf)
+	}
+
+	runner := s.getComposeRunner()
+	if err := runner.Pull(ctx, composePath, writer); err != nil {
+		return nil, err
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("images for stack %s pulled successfully", stackName),
+		Output:  buf.String(),
 	}, nil
 }

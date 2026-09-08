@@ -40,6 +40,7 @@ Dokidoki is configured via environment variables or command-line flags (flags ta
 | `DOKIDOKI_LOG_LEVEL` | `-log-level` | `info` | Logging verbosity (`debug`, `info`, `warn`, `error`) |
 | `DOKIDOKI_LOG_FORMAT` | `-log-format` | `text` | Logging output format (`text`, `json`) |
 | `DOCKER_HOST` | `-docker-host` | Local unix socket | Remote Docker daemon endpoint (e.g. `tcp://...`) |
+| `DOKIDOKI_DOCKER_COMPOSE_BIN` | `-docker-compose-bin` | `docker compose` | Docker compose CLI binary / command |
 
 > For in-depth descriptions of all options, logging formats, and precedence rules, see the [Configuration Guide](docs/user/configuration.md).
 
