@@ -9,7 +9,106 @@ import {
 } from './ui/dialog';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Terminal, Copy, Check, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Terminal as TerminalIcon, Copy, Check, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Terminal as XTerm } from '@xterm/xterm';
+import { FitAddon } from '@xterm/addon-fit';
+import '@xterm/xterm/css/xterm.css';
+
+interface TerminalViewProps {
+  output: string;
+  isRunning: boolean;
+}
+
+const TerminalView: React.FC<TerminalViewProps> = ({ output, isRunning }) => {
+  const containerRef = useRef<HTMLDivElement>(null);
+  const termRef = useRef<XTerm | null>(null);
+  const fitAddonRef = useRef<FitAddon | null>(null);
+  const lastOutputLen = useRef(0);
+
+  useEffect(() => {
+    if (!containerRef.current) return;
+
+    const term = new XTerm({
+      convertEol: true,
+      disableStdin: true,
+      cursorBlink: false,
+      scrollback: 5000,
+      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontSize: 12,
+      lineHeight: 1.3,
+      theme: {
+        background: '#020617', // slate-950
+        foreground: '#cbd5e1', // slate-300
+        cursor: '#020617',
+        selectionBackground: '#334155', // slate-700
+      },
+    });
+
+    const fitAddon = new FitAddon();
+    term.loadAddon(fitAddon);
+    term.open(containerRef.current);
+
+    termRef.current = term;
+    fitAddonRef.current = fitAddon;
+
+    // Fit once dialog layout finishes rendering
+    const timer = setTimeout(() => {
+      try {
+        fitAddon.fit();
+      } catch {}
+    }, 100);
+
+    const ro = new ResizeObserver(() => {
+      try {
+        fitAddon.fit();
+      } catch {}
+    });
+    ro.observe(containerRef.current);
+
+    return () => {
+      clearTimeout(timer);
+      ro.disconnect();
+      term.dispose();
+      termRef.current = null;
+      fitAddonRef.current = null;
+      lastOutputLen.current = 0;
+    };
+  }, []);
+
+  useEffect(() => {
+    const term = termRef.current;
+    if (!term) return;
+
+    if (output.length < lastOutputLen.current) {
+      term.reset();
+      lastOutputLen.current = 0;
+    }
+
+    if (output.length > lastOutputLen.current) {
+      const chunk = output.slice(lastOutputLen.current);
+      term.write(chunk);
+      lastOutputLen.current = output.length;
+    }
+  }, [output]);
+
+  return (
+    <div className="relative bg-slate-950 border border-slate-800 rounded-lg p-3 h-80 flex flex-col overflow-hidden">
+      <div ref={containerRef} className="w-full flex-1 overflow-hidden" />
+      {!output && (
+        <div className="absolute inset-0 flex items-center justify-center pointer-events-none text-slate-500 text-xs italic">
+          {isRunning ? 'Waiting for output...' : 'No output received.'}
+        </div>
+      )}
+    </div>
+  );
+};
+
+const stripAnsi = (str: string): string => {
+  return str
+    .replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '')
+    .replace(/\x1b\([a-zA-Z0-9]/g, '')
+    .replace(/\r/g, '');
+};
 
 interface OperationLogModalProps {
   isOpen: boolean;
@@ -33,7 +132,6 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
   success,
 }) => {
   const [copied, setCopied] = useState(false);
-  const logEndRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     if (!isRunning) return;
@@ -49,15 +147,9 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
     };
   }, [isRunning]);
 
-  useEffect(() => {
-    if (logEndRef.current) {
-      logEndRef.current.scrollIntoView({ behavior: 'smooth' });
-    }
-  }, [output, isRunning]);
-
   const handleCopy = () => {
     const textToCopy = error ? `${output}\n\nError: ${error}` : output;
-    navigator.clipboard.writeText(textToCopy);
+    navigator.clipboard.writeText(stripAnsi(textToCopy));
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -68,7 +160,7 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
         <DialogHeader>
           <div className="flex items-center justify-between pr-6">
             <DialogTitle className="text-lg font-bold text-white flex items-center gap-2">
-              <Terminal className="w-5 h-5 text-rose-500" />
+              <TerminalIcon className="w-5 h-5 text-rose-500" />
               {title}
             </DialogTitle>
             {isRunning ? (
@@ -106,22 +198,13 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
           )}
 
           <div className="relative group">
-            <div className="bg-slate-950 border border-slate-800 rounded-lg p-3 font-mono text-xs text-slate-300 max-h-80 min-h-[140px] overflow-y-auto whitespace-pre-wrap break-all select-text leading-relaxed">
-              {output ? (
-                output
-              ) : isRunning ? (
-                <span className="text-slate-500 italic">Waiting for output...</span>
-              ) : (
-                <span className="text-slate-500 italic">No output received.</span>
-              )}
-              <div ref={logEndRef} />
-            </div>
+            {isOpen && <TerminalView output={output} isRunning={isRunning} />}
 
             {output && (
               <Button
                 size="icon"
                 variant="outline"
-                className="absolute top-2 right-2 h-7 w-7 bg-slate-900/80 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 opacity-0 group-hover:opacity-100 transition-opacity"
+                className="absolute top-2 right-2 h-7 w-7 bg-slate-900/80 border-slate-700 text-slate-300 hover:text-white hover:bg-slate-800 opacity-0 group-hover:opacity-100 transition-opacity z-10"
                 onClick={handleCopy}
                 title="Copy log"
               >
