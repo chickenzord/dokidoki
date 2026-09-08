@@ -1149,6 +1149,24 @@ func TestUpdateStack(t *testing.T) {
 	if !strings.Contains(string(data), "image: nginx:1.25-alpine") {
 		t.Errorf("unexpected updated content: %s", string(data))
 	}
+
+	// Update non-existent stack -> 404
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/stacks/nonexistent-stack", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Errorf("expected 404 Not Found for non-existent stack, got %d", w.Code)
+	}
+
+	// Update external stack -> 400
+	req = httptest.NewRequest(http.MethodPut, "/api/v1/stacks/external-stack", strings.NewReader(payload))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 Bad Request for external stack, got %d", w.Code)
+	}
 }
 
 func TestGetStackFiles(t *testing.T) {

@@ -15,6 +15,7 @@ import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { Server, FileCode, AlertCircle, CheckCircle2, Loader2, Files } from 'lucide-react';
+import { CodeEditor } from './CodeEditor';
 
 interface ImportStackDialogProps {
   isOpen: boolean;
@@ -223,13 +224,14 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
 
                 {files.map((file) => (
                   <TabsContent key={file.name} value={file.name} className="mt-2 outline-none">
-                    <textarea
-                      rows={10}
+                    <CodeEditor
                       value={file.content}
-                      onChange={(e) => handleContentChange(file.name, e.target.value)}
-                      className="w-full bg-slate-950 border border-slate-800 rounded-md p-3 text-slate-200 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-rose-500/50 resize-y"
+                      onChange={(newContent) => handleContentChange(file.name, newContent)}
+                      filename={file.name}
+                      readOnly={false}
+                      minHeight="220px"
+                      maxHeight="420px"
                       placeholder={`Content for ${file.name}`}
-                      spellCheck={false}
                     />
                   </TabsContent>
                 ))}

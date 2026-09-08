@@ -13,6 +13,7 @@ import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
 import { Server, FileCode, AlertCircle, CheckCircle2, Loader2, Sparkles } from 'lucide-react';
+import { CodeEditor } from './CodeEditor';
 
 interface GenerateComposeDialogProps {
   isOpen: boolean;
@@ -149,13 +150,14 @@ export const GenerateComposeDialog: React.FC<GenerateComposeDialogProps> = ({
                 </span>
               )}
             </div>
-            <textarea
-              rows={12}
+            <CodeEditor
               value={composeContent}
-              onChange={(e) => setComposeContent(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-md p-3 text-slate-200 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-rose-500/50 resize-y"
+              onChange={setComposeContent}
+              filename="compose.yaml"
+              readOnly={false}
+              minHeight="240px"
+              maxHeight="450px"
               placeholder="services:&#10;  ..."
-              spellCheck={false}
             />
           </div>
         </div>

@@ -148,6 +148,20 @@ func (s *Server) handleUpdateStack(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	detail, err := s.stackSvc.GetStack(r.Context(), name)
+	if err != nil {
+		if errors.Is(err, stack.ErrNotFound) {
+			writeError(w, http.StatusNotFound, "stack not found")
+			return
+		}
+		writeError(w, http.StatusInternalServerError, "failed to get stack: "+err.Error())
+		return
+	}
+	if detail.Source != string(stack.SourceManaged) {
+		writeError(w, http.StatusBadRequest, "cannot edit external stack: only managed stacks can be edited")
+		return
+	}
+
 	var req stack.CreateStackRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeError(w, http.StatusBadRequest, "invalid request body: "+err.Error())

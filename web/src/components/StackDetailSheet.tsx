@@ -1,6 +1,6 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ClusterStack, StackFilesResponse, ContainerSummary } from '../types';
+import { ClusterStack, StackFilesResponse, ContainerSummary, CreateStackFile } from '../types';
 import { useStackFilesQuery, useStackContainersQuery, useStackDetailQuery } from '../hooks/useClusterData';
 import { api } from '../services/api';
 import {
@@ -11,9 +11,11 @@ import {
 } from './ui/sheet';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
 import { ImportStackDialog } from './ImportStackDialog';
 import { OperationLogModal } from './OperationLogModal';
+import { CodeEditor } from './CodeEditor';
 import {
   Server,
   Layers,
@@ -30,6 +32,12 @@ import {
   RotateCw,
   AlertTriangle,
   AlertCircle,
+  Edit3,
+  Save,
+  Plus,
+  X,
+  Undo2,
+  CheckCircle2,
 } from 'lucide-react';
 
 interface StackDetailSheetProps {
@@ -50,6 +58,17 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const queryClient = useQueryClient();
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
+
+  // Editing state for managed stacks
+  const [isEditing, setIsEditing] = useState(false);
+  const [editedFiles, setEditedFiles] = useState<Record<string, string>>({});
+  const [newFiles, setNewFiles] = useState<string[]>([]);
+  const [activeFileTab, setActiveFileTab] = useState<string>('');
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [saveSuccess, setSaveSuccess] = useState<string | null>(null);
+  const [addingFile, setAddingFile] = useState(false);
+  const [newFileName, setNewFileName] = useState('');
 
   // Streaming log modal states
   const [logModalOpen, setLogModalOpen] = useState(false);
@@ -91,12 +110,20 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const [isLoadingExternalFiles, setIsLoadingExternalFiles] = useState(false);
   const [externalFilesError, setExternalFilesError] = useState<string | null>(null);
 
-  // Reset external files state when stack changes
+  // Reset external files and editing state when stack changes or sheet closes
   useEffect(() => {
     setExternalFilesData(null);
     setIsLoadingExternalFiles(false);
     setExternalFilesError(null);
-  }, [stack?.name, stack?.hostId, stack?.source]);
+    setIsEditing(false);
+    setEditedFiles({});
+    setNewFiles([]);
+    setSaveError(null);
+    setSaveSuccess(null);
+    setAddingFile(false);
+    setNewFileName('');
+    setActiveFileTab('');
+  }, [stack?.name, stack?.hostId, stack?.source, isOpen]);
 
   const handleLoadExternalFiles = async () => {
     if (!stack) return;
@@ -132,6 +159,192 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const defaultFile = files.find((f) => f.isCompose)?.name || files[0]?.name || '';
   const isExternalFilesLoaded = isExternal && externalFilesData !== null;
   const isLoadingFiles = isExternal ? isLoadingExternalFiles : isLoadingManagedFiles;
+
+  // Keep activeFileTab pointing to default file when not set
+  useEffect(() => {
+    if (!activeFileTab && defaultFile) {
+      setActiveFileTab(defaultFile);
+    }
+  }, [defaultFile, activeFileTab]);
+
+  const isDirty = useMemo(() => {
+    if (newFiles.length > 0) return true;
+    for (const f of files) {
+      if (editedFiles[f.name] !== undefined && editedFiles[f.name] !== (f.content || '')) {
+        return true;
+      }
+    }
+    return false;
+  }, [files, editedFiles, newFiles]);
+
+  const editableFileList = useMemo(() => {
+    const list: Array<{
+      name: string;
+      content: string;
+      path?: string;
+      isNew: boolean;
+      isCompose: boolean;
+    }> = [];
+
+    files.forEach((f) => {
+      list.push({
+        name: f.name,
+        content: editedFiles[f.name] !== undefined ? editedFiles[f.name] : (f.content || ''),
+        path: f.path,
+        isNew: false,
+        isCompose: f.isCompose,
+      });
+    });
+
+    newFiles.forEach((name) => {
+      const lower = name.toLowerCase();
+      list.push({
+        name,
+        content: editedFiles[name] !== undefined ? editedFiles[name] : '',
+        path: filesDir ? `${filesDir}/${name}` : name,
+        isNew: true,
+        isCompose: lower.endsWith('.yaml') || lower.endsWith('.yml') || lower.includes('compose'),
+      });
+    });
+
+    return list;
+  }, [files, newFiles, editedFiles, filesDir]);
+
+  const handleStartEditing = (fileToFocus?: string) => {
+    if (isExternal) return;
+    const initialMap: Record<string, string> = {};
+    files.forEach((f) => {
+      initialMap[f.name] = f.content || '';
+    });
+    setEditedFiles(initialMap);
+    setNewFiles([]);
+    setSaveError(null);
+    setSaveSuccess(null);
+    setAddingFile(false);
+    setNewFileName('');
+    if (fileToFocus) {
+      setActiveFileTab(fileToFocus);
+    } else if (!activeFileTab && defaultFile) {
+      setActiveFileTab(defaultFile);
+    }
+    setIsEditing(true);
+  };
+
+  const handleCancelEditing = () => {
+    if (isDirty) {
+      if (!window.confirm('Discard unsaved changes to stack files?')) {
+        return;
+      }
+    }
+    setIsEditing(false);
+    setEditedFiles({});
+    setNewFiles([]);
+    setSaveError(null);
+    setAddingFile(false);
+    setNewFileName('');
+    if (defaultFile && !files.some((f) => f.name === activeFileTab)) {
+      setActiveFileTab(defaultFile);
+    }
+  };
+
+  const handleContentChange = (fileName: string, newContent: string) => {
+    setEditedFiles((prev) => ({
+      ...prev,
+      [fileName]: newContent,
+    }));
+    setSaveSuccess(null);
+    setSaveError(null);
+  };
+
+  const handleAddNewFile = () => {
+    const trimmed = newFileName.trim();
+    if (!trimmed) return;
+
+    if (files.some((f) => f.name === trimmed) || newFiles.includes(trimmed)) {
+      setSaveError(`File "${trimmed}" already exists in stack.`);
+      return;
+    }
+
+    if (trimmed.includes('/') || trimmed.includes('\\') || trimmed.includes('..')) {
+      setSaveError('Invalid file name: path traversal characters are not allowed.');
+      return;
+    }
+
+    const defaultContent = trimmed.startsWith('.env')
+      ? '# Environment variables\n# KEY=VALUE\n'
+      : '';
+
+    setNewFiles((prev) => [...prev, trimmed]);
+    setEditedFiles((prev) => ({
+      ...prev,
+      [trimmed]: defaultContent,
+    }));
+    setActiveFileTab(trimmed);
+    setNewFileName('');
+    setAddingFile(false);
+    setSaveError(null);
+  };
+
+  const handleRemoveNewFile = (fileName: string) => {
+    setNewFiles((prev) => prev.filter((n) => n !== fileName));
+    setEditedFiles((prev) => {
+      const next = { ...prev };
+      delete next[fileName];
+      return next;
+    });
+    if (activeFileTab === fileName) {
+      const remaining = files.length > 0 ? files[0].name : '';
+      setActiveFileTab(remaining);
+    }
+  };
+
+  const handleSaveStack = async () => {
+    if (!stack || isExternal) return;
+    setIsSaving(true);
+    setSaveError(null);
+    setSaveSuccess(null);
+
+    const allFileNames = Array.from(
+      new Set([...files.map((f) => f.name), ...newFiles, ...Object.keys(editedFiles)])
+    );
+
+    const payloadFiles: CreateStackFile[] = allFileNames.map((name) => ({
+      name,
+      content: editedFiles[name] !== undefined
+        ? editedFiles[name]
+        : (files.find((f) => f.name === name)?.content || ''),
+    }));
+
+    if (payloadFiles.length === 0) {
+      setSaveError('Stack must contain at least one file.');
+      setIsSaving(false);
+      return;
+    }
+
+    try {
+      await api.updateStack(
+        stack.name,
+        {
+          name: stack.name,
+          files: payloadFiles,
+        },
+        hostEndpoint
+      );
+
+      setSaveSuccess('Stack files saved to host. Running containers were not restarted.');
+      setIsEditing(false);
+      setEditedFiles({});
+      setNewFiles([]);
+      invalidateStackData();
+      if (onStackUpdated) {
+        onStackUpdated(stack);
+      }
+    } catch (err: any) {
+      setSaveError(err.message || 'Failed to save stack files');
+    } finally {
+      setIsSaving(false);
+    }
+  };
 
   const invalidateStackData = () => {
     queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
@@ -407,6 +620,29 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
                 Down
               </Button>
+
+              {!isExternal && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    if (isEditing) {
+                      handleCancelEditing();
+                    } else {
+                      handleStartEditing();
+                    }
+                  }}
+                  className={`h-8 text-xs transition-colors ${
+                    isEditing
+                      ? 'bg-rose-950/60 text-rose-300 border-rose-800/60 hover:bg-rose-900/60'
+                      : 'bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700'
+                  }`}
+                  title={isEditing ? 'Exit editing mode' : 'Edit stack configuration files'}
+                >
+                  <Edit3 className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
+                  {isEditing ? 'Editing' : 'Edit'}
+                </Button>
+              )}
             </div>
           </SheetHeader>
 
@@ -523,10 +759,22 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
             {/* Section 2: Stack Directory Files */}
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
-                <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
-                  <FileCode className="w-3.5 h-3.5 text-slate-400" />
-                  Stack Files {isExternal && !isExternalFilesLoaded ? '' : `(${files.length})`}
-                </h3>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+                    <FileCode className="w-3.5 h-3.5 text-slate-400" />
+                    Stack Files {isExternal && !isExternalFilesLoaded ? '' : `(${isEditing ? editableFileList.length : files.length})`}
+                  </h3>
+                  {!isExternal && isEditing && (
+                    <Badge variant="outline" className="bg-rose-950/60 text-rose-300 border-rose-800/60 font-mono text-[10px] py-0">
+                      Editing
+                    </Badge>
+                  )}
+                  {!isExternal && isEditing && isDirty && (
+                    <Badge variant="outline" className="bg-amber-950/60 text-amber-300 border-amber-800/60 font-mono text-[10px] py-0">
+                      Unsaved Changes
+                    </Badge>
+                  )}
+                </div>
                 <div className="flex items-center gap-2">
                   {filesDir && (
                     <span className="text-[11px] text-slate-500 font-mono truncate max-w-xs flex items-center gap-1">
@@ -544,8 +792,142 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                       Import Stack
                     </Button>
                   )}
+                  {!isExternal && !isEditing && files.length > 0 && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => handleStartEditing()}
+                      className="h-7 text-xs bg-slate-800/90 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors flex items-center gap-1.5 shadow-sm"
+                    >
+                      <Edit3 className="w-3.5 h-3.5 text-rose-400" />
+                      Edit Files
+                    </Button>
+                  )}
+                  {!isExternal && isEditing && (
+                    <div className="flex items-center gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={handleCancelEditing}
+                        disabled={isSaving}
+                        className="h-7 text-xs text-slate-400 hover:text-white hover:bg-slate-800 transition-colors"
+                      >
+                        <Undo2 className="w-3.5 h-3.5 mr-1" />
+                        Cancel
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={handleSaveStack}
+                        disabled={isSaving || !isDirty}
+                        className="h-7 text-xs bg-rose-600 hover:bg-rose-500 text-white font-medium transition-colors shadow-sm disabled:opacity-50 flex items-center gap-1.5"
+                      >
+                        {isSaving ? (
+                          <>
+                            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          <>
+                            <Save className="w-3.5 h-3.5" />
+                            Save Changes
+                          </>
+                        )}
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
+
+              {/* Status alerts */}
+              {saveError && (
+                <div className="p-3 bg-rose-950/40 border border-rose-800/60 rounded-lg text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                  <span>{saveError}</span>
+                </div>
+              )}
+
+              {saveSuccess && (
+                <div className="p-3 bg-emerald-950/40 border border-emerald-800/60 rounded-lg text-emerald-300 text-xs flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-400 flex-shrink-0" />
+                    <span>{saveSuccess}</span>
+                  </div>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleComposeUp}
+                    className="h-6 px-2 text-[11px] bg-emerald-900/50 hover:bg-emerald-800 text-emerald-200 border-emerald-700/60 flex-shrink-0 flex items-center gap-1"
+                  >
+                    <Play className="w-3 h-3 text-emerald-400" />
+                    Run Up now
+                  </Button>
+                </div>
+              )}
+
+              {/* Editing Controls & Add File Bar */}
+              {!isExternal && isEditing && (
+                <div className="p-3 bg-slate-950/70 border border-slate-800/90 rounded-lg space-y-2">
+                  <div className="flex flex-wrap items-center justify-between gap-2 text-xs">
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <span className="text-slate-300 font-medium">Stack Configuration Editor</span>
+                      <span className="text-slate-600">•</span>
+                      <span className="text-[11px] text-slate-400">
+                        Editing is just editing; changes are saved to disk without automatically updating running containers.
+                      </span>
+                    </div>
+
+                    {!addingFile ? (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setAddingFile(true)}
+                        className="h-6 px-2 text-[11px] bg-slate-900 hover:bg-slate-800 text-slate-300 border-slate-700 flex items-center gap-1"
+                      >
+                        <Plus className="w-3 h-3 text-rose-400" />
+                        Add File
+                      </Button>
+                    ) : null}
+                  </div>
+
+                  {addingFile && (
+                    <div className="flex items-center gap-2 pt-1 border-t border-slate-800/80">
+                      <Input
+                        value={newFileName}
+                        onChange={(e) => setNewFileName(e.target.value)}
+                        onKeyDown={(e) => {
+                          if (e.key === 'Enter') handleAddNewFile();
+                          if (e.key === 'Escape') {
+                            setAddingFile(false);
+                            setNewFileName('');
+                          }
+                        }}
+                        placeholder="e.g. .env or docker-compose.override.yaml"
+                        className="h-7 text-xs bg-slate-900 border-slate-700 text-slate-200 font-mono flex-1 focus:ring-rose-500"
+                        autoFocus
+                      />
+                      <Button
+                        size="sm"
+                        onClick={handleAddNewFile}
+                        disabled={!newFileName.trim()}
+                        className="h-7 px-2.5 text-xs bg-rose-600 hover:bg-rose-500 text-white"
+                      >
+                        Add
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setAddingFile(false);
+                          setNewFileName('');
+                        }}
+                        className="h-7 px-2 text-xs text-slate-400 hover:text-white"
+                      >
+                        Cancel
+                      </Button>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {isExternal && !isExternalFilesLoaded ? (
                 <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-xl flex flex-col items-center justify-center text-center space-y-3">
@@ -594,40 +976,81 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                   <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
                   Loading stack files...
                 </div>
-              ) : files.length === 0 ? (
+              ) : files.length === 0 && (!isEditing || editableFileList.length === 0) ? (
                 <div className="p-6 bg-slate-950/40 border border-slate-800/60 rounded-lg text-slate-500 text-xs text-center">
                   No configuration files found in stack directory
                 </div>
-              ) : (
-                <Tabs defaultValue={defaultFile} className="w-full">
+              ) : isEditing ? (
+                /* Editing Mode Tabs & Editor */
+                <Tabs
+                  value={activeFileTab || (editableFileList[0]?.name || '')}
+                  onValueChange={setActiveFileTab}
+                  className="w-full"
+                >
                   <TabsList className="bg-slate-950/80 border border-slate-800/80 p-0.5 h-auto flex flex-wrap gap-1">
-                    {files.map((file) => (
-                      <TabsTrigger
-                        key={file.name}
-                        value={file.name}
-                        className="text-xs font-mono px-3 py-1.5 data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400"
-                      >
-                        {file.name}
-                        {file.isCompose && (
-                          <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-rose-400" />
-                        )}
-                      </TabsTrigger>
-                    ))}
+                    {editableFileList.map((file) => {
+                      const isModified =
+                        editedFiles[file.name] !== undefined &&
+                        (file.isNew || editedFiles[file.name] !== (files.find((f) => f.name === file.name)?.content || ''));
+
+                      return (
+                        <TabsTrigger
+                          key={file.name}
+                          value={file.name}
+                          className="text-xs font-mono px-3 py-1.5 data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400 flex items-center gap-1.5"
+                        >
+                          <span>{file.name}</span>
+                          {file.isCompose && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-rose-400" title="Compose file" />
+                          )}
+                          {isModified && (
+                            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" title="Unsaved modifications" />
+                          )}
+                          {file.isNew && (
+                            <button
+                              type="button"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                handleRemoveNewFile(file.name);
+                              }}
+                              className="ml-1 text-slate-500 hover:text-rose-400"
+                              title="Remove new file"
+                            >
+                              <X className="w-3 h-3" />
+                            </button>
+                          )}
+                        </TabsTrigger>
+                      );
+                    })}
                   </TabsList>
 
-                  {files.map((file) => {
-                    const lines = (file.content || '').split('\n');
+                  {editableFileList.map((file) => {
                     const isCopied = copiedFile === file.name;
+                    const isModified =
+                      editedFiles[file.name] !== undefined &&
+                      (file.isNew || editedFiles[file.name] !== (files.find((f) => f.name === file.name)?.content || ''));
 
                     return (
                       <TabsContent key={file.name} value={file.name} className="mt-2 outline-none">
-                        <div className="relative border border-slate-800 rounded-lg bg-slate-950/80 overflow-hidden">
+                        <div className="relative border border-slate-800 rounded-lg bg-slate-950 overflow-hidden">
                           <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/60 border-b border-slate-800/80 text-[11px] text-slate-400">
-                            <span className="font-mono">{file.path}</span>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-slate-200">{file.path || file.name}</span>
+                              {file.isNew && (
+                                <Badge variant="outline" className="text-[10px] bg-blue-950/40 text-blue-300 border-blue-800/50 font-mono py-0">
+                                  new file
+                                </Badge>
+                              )}
+                              {isModified && !file.isNew && (
+                                <Badge variant="outline" className="text-[10px] bg-amber-950/40 text-amber-300 border-amber-800/50 font-mono py-0">
+                                  modified
+                                </Badge>
+                              )}
+                            </div>
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => handleCopy(file.content || '', file.name)}
+                              onClick={() => handleCopy(file.content, file.name)}
                               className="h-6 px-2 text-[11px] text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-1"
                             >
                               {isCopied ? (
@@ -644,16 +1067,89 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                             </Button>
                           </div>
 
-                          <div className="p-3 max-h-96 overflow-y-auto font-mono text-xs text-slate-200 leading-relaxed select-text">
-                            {lines.map((line, idx) => (
-                              <div key={idx} className="table-row hover:bg-slate-900/40">
-                                <span className="table-cell pr-4 text-slate-600 select-none text-right w-8">
-                                  {idx + 1}
-                                </span>
-                                <span className="table-cell whitespace-pre">{line}</span>
-                              </div>
-                            ))}
+                          <CodeEditor
+                            value={file.content}
+                            onChange={(newContent) => handleContentChange(file.name, newContent)}
+                            filename={file.name}
+                            readOnly={false}
+                            minHeight="280px"
+                            maxHeight="520px"
+                          />
+                        </div>
+                      </TabsContent>
+                    );
+                  })}
+                </Tabs>
+              ) : (
+                /* Read-Only Mode Tabs & Viewer with Syntax Highlighting */
+                <Tabs
+                  value={activeFileTab || defaultFile}
+                  onValueChange={setActiveFileTab}
+                  className="w-full"
+                >
+                  <TabsList className="bg-slate-950/80 border border-slate-800/80 p-0.5 h-auto flex flex-wrap gap-1">
+                    {files.map((file) => (
+                      <TabsTrigger
+                        key={file.name}
+                        value={file.name}
+                        className="text-xs font-mono px-3 py-1.5 data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400"
+                      >
+                        {file.name}
+                        {file.isCompose && (
+                          <span className="ml-1.5 w-1.5 h-1.5 rounded-full bg-rose-400" />
+                        )}
+                      </TabsTrigger>
+                    ))}
+                  </TabsList>
+
+                  {files.map((file) => {
+                    const isCopied = copiedFile === file.name;
+
+                    return (
+                      <TabsContent key={file.name} value={file.name} className="mt-2 outline-none">
+                        <div className="relative border border-slate-800 rounded-lg bg-slate-950 overflow-hidden">
+                          <div className="flex items-center justify-between px-3 py-1.5 bg-slate-900/60 border-b border-slate-800/80 text-[11px] text-slate-400">
+                            <span className="font-mono text-slate-300">{file.path}</span>
+                            <div className="flex items-center gap-1.5">
+                              {!isExternal && (
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => handleStartEditing(file.name)}
+                                  className="h-6 px-2 text-[11px] text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-1"
+                                >
+                                  <Edit3 className="w-3 h-3 text-rose-400" />
+                                  Edit
+                                </Button>
+                              )}
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                onClick={() => handleCopy(file.content || '', file.name)}
+                                className="h-6 px-2 text-[11px] text-slate-400 hover:text-white hover:bg-slate-800 flex items-center gap-1"
+                              >
+                                {isCopied ? (
+                                  <>
+                                    <Check className="w-3 h-3 text-emerald-400" />
+                                    Copied
+                                  </>
+                                ) : (
+                                  <>
+                                    <Copy className="w-3 h-3" />
+                                    Copy
+                                  </>
+                                )}
+                              </Button>
+                            </div>
                           </div>
+
+                          <CodeEditor
+                            value={file.content || ''}
+                            filename={file.name}
+                            readOnly={true}
+                            minHeight="180px"
+                            maxHeight="480px"
+                          />
                         </div>
                       </TabsContent>
                     );
