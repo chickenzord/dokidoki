@@ -11,6 +11,7 @@ import (
 )
 
 // handleListNodes handles GET /api/v1/nodes.
+// Optional query parameter ?status=alive|suspect|offline|active (where "active" filters out offline nodes).
 func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if s.clusterSvc == nil {
 		writeJSON(w, http.StatusOK, []cluster.Node{})
@@ -20,6 +21,22 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	if nodes == nil {
 		nodes = []cluster.Node{}
 	}
+
+	statusFilter := r.URL.Query().Get("status")
+	if statusFilter != "" {
+		filtered := make([]cluster.Node, 0, len(nodes))
+		for _, n := range nodes {
+			if statusFilter == "active" {
+				if n.Status != cluster.StatusOffline {
+					filtered = append(filtered, n)
+				}
+			} else if string(n.Status) == statusFilter {
+				filtered = append(filtered, n)
+			}
+		}
+		nodes = filtered
+	}
+
 	writeJSON(w, http.StatusOK, nodes)
 }
 

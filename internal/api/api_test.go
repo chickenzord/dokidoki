@@ -1584,5 +1584,136 @@ func TestStackComposeOperationHandlers(t *testing.T) {
 	})
 }
 
+type mockClusterService struct {
+	nodes []cluster.Node
+}
+
+func (m *mockClusterService) ListNodes() []cluster.Node {
+	return m.nodes
+}
+
+func (m *mockClusterService) GetNode(id string) (*cluster.Node, bool) {
+	for _, n := range m.nodes {
+		if n.ID == id {
+			return &n, true
+		}
+	}
+	return nil, false
+}
+
+func (m *mockClusterService) HandleHandshake(req cluster.HandshakeRequest) (*cluster.HandshakeResponse, error) {
+	return nil, nil
+}
+
+func (m *mockClusterService) HandleHeartbeat(msg cluster.HeartbeatMessage) error {
+	return nil
+}
+
+func (m *mockClusterService) HandleLeave(nodeID string) {}
+
+func (m *mockClusterService) RemoveNode(nodeID string) error {
+	return nil
+}
+
+func TestHandleListNodes(t *testing.T) {
+	nodes := []cluster.Node{
+		{ID: "node-1", Name: "Node 1", Status: cluster.StatusAlive},
+		{ID: "node-2", Name: "Node 2", Status: cluster.StatusSuspect},
+		{ID: "node-3", Name: "Node 3", Status: cluster.StatusOffline},
+	}
+	mockCluster := &mockClusterService{nodes: nodes}
+	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080}
+	server := NewServer(cfg, &mockDocker{}, nil, mockCluster, "")
+	handler := server.Routes()
+
+	t.Run("AllNodes", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var result []cluster.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result) != 3 {
+			t.Fatalf("expected 3 nodes, got %d", len(result))
+		}
+	})
+
+	t.Run("StatusFilter_Alive", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?status=alive", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var result []cluster.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result) != 1 || result[0].ID != "node-1" {
+			t.Fatalf("expected 1 alive node (node-1), got %+v", result)
+		}
+	})
+
+	t.Run("StatusFilter_Active", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?status=active", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var result []cluster.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result) != 2 {
+			t.Fatalf("expected 2 active nodes (alive & suspect), got %d", len(result))
+		}
+	})
+
+	t.Run("StatusFilter_Offline", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes?status=offline", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var result []cluster.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result) != 1 || result[0].ID != "node-3" {
+			t.Fatalf("expected 1 offline node (node-3), got %+v", result)
+		}
+	})
+
+	t.Run("NilClusterService", func(t *testing.T) {
+		nilServer := NewServer(cfg, &mockDocker{}, nil, nil, "")
+		nilHandler := nilServer.Routes()
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/nodes", nil)
+		w := httptest.NewRecorder()
+		nilHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var result []cluster.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+			t.Fatal(err)
+		}
+		if len(result) != 0 {
+			t.Fatalf("expected 0 nodes, got %d", len(result))
+		}
+	})
+}
+
+
 
 

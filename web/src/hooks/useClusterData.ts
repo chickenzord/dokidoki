@@ -22,10 +22,12 @@ export function getNodeEndpoint(node: Node): string {
   return `http://${addr}`;
 }
 
+export const CLUSTER_NODE_TIMEOUT_MS = 3500;
+
 export function useNodesQuery() {
   return useQuery({
     queryKey: ['nodes'],
-    queryFn: () => api.getNodes(),
+    queryFn: () => api.getNodes(undefined, { timeout: CLUSTER_NODE_TIMEOUT_MS }),
     refetchInterval: 10000,
   });
 }
@@ -36,15 +38,28 @@ export function useClusterStacksQuery(selectedHostId?: string | null) {
   return useQuery({
     queryKey: ['cluster-stacks', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
     queryFn: async (): Promise<ClusterStack[]> => {
-      // If nodes list is empty, try querying the local endpoint as bootstrap
-      const targetNodes = nodes.length > 0
-        ? (selectedHostId && selectedHostId !== 'all' ? nodes.filter(n => n.id === selectedHostId) : nodes)
-        : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
+      const isAllNodes = !selectedHostId || selectedHostId === 'all';
+
+      // When querying for all nodes, filter out offline nodes to avoid stalling on dead peers
+      const filteredNodes = isAllNodes
+        ? nodes.filter((n) => n.status !== 'offline')
+        : nodes.filter((n) => n.id === selectedHostId);
+
+      // If nodes list is empty or no valid nodes match, fall back to self if available, or bootstrap local host
+      const targetNodes = filteredNodes.length > 0
+        ? filteredNodes
+        : (isAllNodes && nodes.some((n) => n.is_self))
+          ? nodes.filter((n) => n.is_self)
+          : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
 
       const results = await Promise.allSettled(
         targetNodes.map(async (node) => {
+          // If remote node has no reachable address, do not attempt query or fallback to local
+          if (!node.is_self && (!node.addresses || node.addresses.length === 0)) {
+            return [];
+          }
           const endpoint = getNodeEndpoint(node);
-          const stacks = await api.getStacks(endpoint);
+          const stacks = await api.getStacks(endpoint, undefined, { timeout: CLUSTER_NODE_TIMEOUT_MS });
           return stacks.map((s) => ({
             ...s,
             hostId: node.id,
@@ -76,14 +91,28 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
   return useQuery({
     queryKey: ['cluster-containers', selectedHostId, nodes.map(n => `${n.id}:${n.status}`).join(',')],
     queryFn: async (): Promise<ClusterContainer[]> => {
-      const targetNodes = nodes.length > 0
-        ? (selectedHostId && selectedHostId !== 'all' ? nodes.filter(n => n.id === selectedHostId) : nodes)
-        : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
+      const isAllNodes = !selectedHostId || selectedHostId === 'all';
+
+      // When querying for all nodes, filter out offline nodes to avoid stalling on dead peers
+      const filteredNodes = isAllNodes
+        ? nodes.filter((n) => n.status !== 'offline')
+        : nodes.filter((n) => n.id === selectedHostId);
+
+      // If nodes list is empty or no valid nodes match, fall back to self if available, or bootstrap local host
+      const targetNodes = filteredNodes.length > 0
+        ? filteredNodes
+        : (isAllNodes && nodes.some((n) => n.is_self))
+          ? nodes.filter((n) => n.is_self)
+          : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
 
       const results = await Promise.allSettled(
         targetNodes.map(async (node) => {
+          // If remote node has no reachable address, do not attempt query or fallback to local
+          if (!node.is_self && (!node.addresses || node.addresses.length === 0)) {
+            return [];
+          }
           const endpoint = getNodeEndpoint(node);
-          const containers = await api.getContainers(endpoint);
+          const containers = await api.getContainers(endpoint, undefined, { timeout: CLUSTER_NODE_TIMEOUT_MS });
           return containers.map((c) => ({
             ...c,
             hostId: node.id,

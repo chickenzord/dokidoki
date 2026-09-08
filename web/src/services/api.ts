@@ -12,6 +12,10 @@ import {
   OperationResult,
 } from '../types';
 
+export interface RequestOptions extends RequestInit {
+  timeout?: number;
+}
+
 class ApiService {
   private activeEndpoint: string = '';
   private endpointChangeListeners: Array<(endpoint: string) => void> = [];
@@ -63,21 +67,52 @@ class ApiService {
     return base ? `${base}${cleanPath}` : cleanPath;
   }
 
-  /**
-   * Performs a fetch with transparent error handling and fallback to local endpoint
-   * if a remote node is unreachable.
-   */
-  public async request<T>(path: string, options?: RequestInit, customEndpoint?: string): Promise<T> {
-    const url = this.resolveUrl(path, customEndpoint);
+  private async fetchWithTimeout(url: string, options?: RequestOptions): Promise<Response> {
+    const timeout = options?.timeout ?? 5000;
+    const controller = new AbortController();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+
+    if (timeout > 0) {
+      timer = setTimeout(() => {
+        controller.abort(new DOMException(`Request timed out after ${timeout}ms`, 'TimeoutError'));
+      }, timeout);
+    }
+
+    if (options?.signal) {
+      if (options.signal.aborted) {
+        controller.abort(options.signal.reason);
+      } else {
+        options.signal.addEventListener('abort', () => {
+          controller.abort(options.signal?.reason);
+        });
+      }
+    }
 
     try {
-      const response = await fetch(url, {
+      return await fetch(url, {
         ...options,
+        signal: controller.signal,
         headers: {
           'Accept': 'application/json',
           ...(options?.headers || {}),
         },
       });
+    } finally {
+      if (timer) {
+        clearTimeout(timer);
+      }
+    }
+  }
+
+  /**
+   * Performs a fetch with transparent error handling and fallback to local endpoint
+   * if a remote node is unreachable.
+   */
+  public async request<T>(path: string, options?: RequestOptions, customEndpoint?: string): Promise<T> {
+    const url = this.resolveUrl(path, customEndpoint);
+
+    try {
+      const response = await this.fetchWithTimeout(url, options);
 
       if (!response.ok) {
         const errorBody = await response.json().catch(() => null);
@@ -92,13 +127,7 @@ class ApiService {
       if (isRemote && !customEndpoint) {
         console.warn(`Request to active remote node (${this.activeEndpoint}) failed: ${err.message}. Falling back to local node.`);
         const localUrl = this.resolveUrl(path, '');
-        const localResp = await fetch(localUrl, {
-          ...options,
-          headers: {
-            'Accept': 'application/json',
-            ...(options?.headers || {}),
-          },
-        });
+        const localResp = await this.fetchWithTimeout(localUrl, options);
         if (!localResp.ok) {
           throw new Error(`Fallback failed: HTTP ${localResp.status}`);
         }
@@ -108,67 +137,77 @@ class ApiService {
     }
   }
 
-  public async ping(customEndpoint?: string): Promise<PingResponse> {
+  public async ping(customEndpoint?: string, options?: RequestOptions): Promise<PingResponse> {
     try {
-      return await this.request<PingResponse>('/api/v1/host/ping', { method: 'GET' }, customEndpoint);
+      return await this.request<PingResponse>('/api/v1/host/ping', { method: 'GET', ...options }, customEndpoint);
     } catch (err: any) {
       return { status: 'error', error: err.message };
     }
   }
 
-  public async getHostInfo(customEndpoint?: string): Promise<HostInfo> {
-    return this.request<HostInfo>('/api/v1/host', { method: 'GET' }, customEndpoint);
+  public async getHostInfo(customEndpoint?: string, options?: RequestOptions): Promise<HostInfo> {
+    return this.request<HostInfo>('/api/v1/host', { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async getNodes(customEndpoint?: string): Promise<Node[]> {
-    return this.request<Node[]>('/api/v1/nodes', { method: 'GET' }, customEndpoint);
+  public async getNodes(customEndpoint?: string, options?: RequestOptions): Promise<Node[]> {
+    return this.request<Node[]>('/api/v1/nodes', { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async getStacks(customEndpoint?: string, source?: string): Promise<StackSummary[]> {
+  public async getStacks(customEndpoint?: string, source?: string, options?: RequestOptions): Promise<StackSummary[]> {
     const query = source && source !== 'all' ? `?source=${encodeURIComponent(source)}` : '';
-    return this.request<StackSummary[]>(`/api/v1/stacks${query}`, { method: 'GET' }, customEndpoint);
+    return this.request<StackSummary[]>(`/api/v1/stacks${query}`, { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async getContainers(customEndpoint?: string, stack?: string): Promise<ContainerSummary[]> {
+  public async getContainers(customEndpoint?: string, stack?: string, options?: RequestOptions): Promise<ContainerSummary[]> {
     const query = stack ? `?stack=${encodeURIComponent(stack)}` : '';
-    return this.request<ContainerSummary[]>(`/api/v1/containers${query}`, { method: 'GET' }, customEndpoint);
+    return this.request<ContainerSummary[]>(`/api/v1/containers${query}`, { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async getContainer(id: string, customEndpoint?: string): Promise<ContainerSummary> {
-    return this.request<ContainerSummary>(`/api/v1/containers/${encodeURIComponent(id)}`, { method: 'GET' }, customEndpoint);
+  public async getContainer(id: string, customEndpoint?: string, options?: RequestOptions): Promise<ContainerSummary> {
+    return this.request<ContainerSummary>(`/api/v1/containers/${encodeURIComponent(id)}`, { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async inspectContainer(id: string, customEndpoint?: string): Promise<EnrichedContainerInspect> {
-    return this.request<EnrichedContainerInspect>(`/api/v1/containers/${encodeURIComponent(id)}`, { method: 'GET' }, customEndpoint);
+  public async inspectContainer(id: string, customEndpoint?: string, options?: RequestOptions): Promise<EnrichedContainerInspect> {
+    return this.request<EnrichedContainerInspect>(`/api/v1/containers/${encodeURIComponent(id)}`, { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async createStack(data: CreateStackRequest, customEndpoint?: string): Promise<StackSummary> {
+  public async createStack(data: CreateStackRequest, customEndpoint?: string, options?: RequestOptions): Promise<StackSummary> {
     return this.request<StackSummary>('/api/v1/stacks', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options?.headers || {}),
+      },
       body: JSON.stringify(data),
+      timeout: options?.timeout ?? 30000,
     }, customEndpoint);
   }
 
-  public async updateStack(name: string, data: CreateStackRequest, customEndpoint?: string): Promise<StackSummary> {
+  public async updateStack(name: string, data: CreateStackRequest, customEndpoint?: string, options?: RequestOptions): Promise<StackSummary> {
     return this.request<StackSummary>(`/api/v1/stacks/${encodeURIComponent(name)}`, {
       method: 'PUT',
-      headers: { 'Content-Type': 'application/json' },
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options?.headers || {}),
+      },
       body: JSON.stringify(data),
+      timeout: options?.timeout ?? 30000,
     }, customEndpoint);
   }
 
-  public async getStackFiles(name: string, read?: boolean, customEndpoint?: string): Promise<StackFilesResponse> {
+  public async getStackFiles(name: string, read?: boolean, customEndpoint?: string, options?: RequestOptions): Promise<StackFilesResponse> {
     const query = read ? '?read=true' : '';
-    return this.request<StackFilesResponse>(`/api/v1/stacks/${encodeURIComponent(name)}/files${query}`, { method: 'GET' }, customEndpoint);
+    return this.request<StackFilesResponse>(`/api/v1/stacks/${encodeURIComponent(name)}/files${query}`, { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async getStackFile(name: string, filename: string, customEndpoint?: string): Promise<StackFile> {
-    return this.request<StackFile>(`/api/v1/stacks/${encodeURIComponent(name)}/files/${encodeURIComponent(filename)}`, { method: 'GET' }, customEndpoint);
+  public async getStackFile(name: string, filename: string, customEndpoint?: string, options?: RequestOptions): Promise<StackFile> {
+    return this.request<StackFile>(`/api/v1/stacks/${encodeURIComponent(name)}/files/${encodeURIComponent(filename)}`, { method: 'GET', ...options }, customEndpoint);
   }
 
-  public async getContainerCompose(id: string, customEndpoint?: string): Promise<ContainerComposeResponse> {
-    return this.request<ContainerComposeResponse>(`/api/v1/containers/${encodeURIComponent(id)}/compose`, { method: 'GET' }, customEndpoint);
+  public async getContainerCompose(id: string, customEndpoint?: string, options?: RequestOptions): Promise<ContainerComposeResponse> {
+    return this.request<ContainerComposeResponse>(`/api/v1/containers/${encodeURIComponent(id)}/compose`, { method: 'GET', ...options }, customEndpoint);
   }
 
   /**
