@@ -33,13 +33,12 @@ const TerminalView: React.FC<TerminalViewProps> = ({ output, isRunning }) => {
       disableStdin: true,
       cursorBlink: false,
       scrollback: 5000,
-      fontFamily: 'ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace',
+      fontFamily: 'monospace',
       fontSize: 12,
       lineHeight: 1.3,
       theme: {
         background: '#020617', // slate-950
         foreground: '#cbd5e1', // slate-300
-        cursor: '#020617',
         selectionBackground: '#334155', // slate-700
       },
     });
@@ -50,23 +49,30 @@ const TerminalView: React.FC<TerminalViewProps> = ({ output, isRunning }) => {
 
     termRef.current = term;
     fitAddonRef.current = fitAddon;
+    lastOutputLen.current = 0;
 
-    // Fit once dialog layout finishes rendering
-    const timer = setTimeout(() => {
+    const safeFit = () => {
       try {
-        fitAddon.fit();
-      } catch {}
-    }, 100);
+        if (containerRef.current && containerRef.current.clientWidth > 0 && containerRef.current.clientHeight > 0) {
+          fitAddon.fit();
+        }
+      } catch {
+        // ignore layout errors during transitions
+      }
+    };
+
+    safeFit();
+    const timer1 = setTimeout(safeFit, 50);
+    const timer2 = setTimeout(safeFit, 200);
 
     const ro = new ResizeObserver(() => {
-      try {
-        fitAddon.fit();
-      } catch {}
+      safeFit();
     });
     ro.observe(containerRef.current);
 
     return () => {
-      clearTimeout(timer);
+      clearTimeout(timer1);
+      clearTimeout(timer2);
       ro.disconnect();
       term.dispose();
       termRef.current = null;
