@@ -268,9 +268,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                     <Badge variant="outline" className="text-xs bg-emerald-950/40 text-emerald-400 border-emerald-800/60 font-mono">
                       Managed
                     </Badge>
-                    {stack.takeover_pending && (
+                    {stack.pending_import && (
                       <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px]">
-                        Takeover Pending
+                        Import Pending
                       </Badge>
                     )}
                   </>
@@ -278,13 +278,13 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
               </div>
             </div>
 
-            {/* Takeover Pending Alert Banner */}
-            {stack.takeover_pending && (
+            {/* Import Pending Alert Banner */}
+            {stack.pending_import && (
               <div className="mt-3 p-3.5 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs flex items-start gap-2.5">
                 <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
                 <div className="leading-relaxed">
-                  <span className="font-semibold text-amber-200">Takeover Pending: </span>
-                  This stack was imported into Dokidoki, but its containers are still running against the external directory. Click &apos;Up&apos; to redeploy containers under Dokidoki management.
+                  <span className="font-semibold text-amber-200">Import Pending: </span>
+                  This stack was imported into Dokidoki, but its containers are still running from the external directory. Click &apos;Up&apos; or &apos;Restart&apos; to redeploy containers under Dokidoki management.
                 </div>
               </div>
             )}

@@ -727,7 +727,7 @@ func (s *Service) CreateOrImportStack(ctx context.Context, req CreateStackReques
 		ComposePath:     filepath.Join(stackDir, "compose.yaml"),
 		Rollup:          Rollup{},
 		Services:        []string{},
-		TakeoverPending: false,
+		PendingImport:  false,
 	}, nil
 }
 
@@ -1008,6 +1008,8 @@ func (s *Service) resolveComposeFile(ctx context.Context, name string) (string, 
 }
 
 // ComposeUp executes `docker compose up -d --remove-orphans` on the given stack.
+// If the stack is in PendingImport, it appends `--force-recreate` to ensure containers are recreated
+// and their labels/working_dir point to Dokidoki's stack directory.
 func (s *Service) ComposeUp(ctx context.Context, stackName string, out io.Writer) (*OperationResult, error) {
 	composePath, err := s.resolveComposeFile(ctx, stackName)
 	if err != nil {
@@ -1020,8 +1022,15 @@ func (s *Service) ComposeUp(ctx context.Context, stackName string, out io.Writer
 		writer = io.MultiWriter(out, &buf)
 	}
 
+	var extraArgs []string
+	if categorized, _, err := s.getCategorized(ctx); err == nil && categorized != nil {
+		if detail, ok := categorized.GetStack(stackName); ok && detail.PendingImport {
+			extraArgs = append(extraArgs, "--force-recreate")
+		}
+	}
+
 	runner := s.getComposeRunner()
-	if err := runner.Up(ctx, composePath, writer); err != nil {
+	if err := runner.Up(ctx, composePath, writer, extraArgs...); err != nil {
 		return nil, err
 	}
 
@@ -1058,10 +1067,20 @@ func (s *Service) ComposeDown(ctx context.Context, stackName string, out io.Writ
 }
 
 // ComposeRestart executes `docker compose restart [service]` on the given stack.
+// If service is empty and the stack is in PendingImport, it delegates to ComposeUp (with --force-recreate)
+// so that restarting an imported stack recreates containers under Dokidoki management instead of staying pending.
 func (s *Service) ComposeRestart(ctx context.Context, stackName string, service string, out io.Writer) (*OperationResult, error) {
 	composePath, err := s.resolveComposeFile(ctx, stackName)
 	if err != nil {
 		return nil, err
+	}
+
+	if service == "" {
+		if categorized, _, err := s.getCategorized(ctx); err == nil && categorized != nil {
+			if detail, ok := categorized.GetStack(stackName); ok && detail.PendingImport {
+				return s.ComposeUp(ctx, stackName, out)
+			}
+		}
 	}
 
 	var buf bytes.Buffer

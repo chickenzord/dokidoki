@@ -47,7 +47,7 @@ type Summary struct {
 	ComposePath     string   `json:"composePath,omitempty"`
 	Rollup          Rollup   `json:"rollup"`
 	Services        []string `json:"services"`
-	TakeoverPending bool     `json:"takeover_pending"`
+	PendingImport  bool     `json:"pending_import"`
 }
 
 // Detail provides the Summary plus full container details.

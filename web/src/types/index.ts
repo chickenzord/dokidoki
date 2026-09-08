@@ -27,7 +27,7 @@ export interface StackSummary {
   rollup: ContainerRollup;
   services: string[];
   is_self?: boolean;
-  takeover_pending?: boolean;
+  pending_import?: boolean;
 }
 
 export interface PortMapping {
@@ -55,7 +55,7 @@ export interface ClusterStack extends StackSummary {
   hostId: string;
   hostName: string;
   hostEndpoint: string;
-  takeover_pending?: boolean;
+  pending_import?: boolean;
 }
 
 export interface ClusterContainer extends ContainerSummary {

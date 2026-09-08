@@ -9,8 +9,16 @@ import {
   Layers,
   Search,
   AlertCircle,
+  AlertTriangle,
+  HelpCircle,
   Loader2,
 } from 'lucide-react';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from './ui/tooltip';
 
 export interface ClusterStacksViewProps {
   selectedHostId?: string | null;
@@ -166,71 +174,86 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
           No stacks found matching your filters.
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
-          {filteredStacks.map((stack) => {
-            const hasRunning = stack.rollup.running > 0;
-            const isAllRunning = stack.rollup.total > 0 && stack.rollup.running === stack.rollup.total;
+        <TooltipProvider delayDuration={150}>
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-2">
+            {filteredStacks.map((stack) => {
+              const hasRunning = stack.rollup.running > 0;
+              const isAllRunning = stack.rollup.total > 0 && stack.rollup.running === stack.rollup.total;
 
-            return (
-              <div
-                key={`${stack.hostId}-${stack.name}`}
-                onClick={() => setSelectedStack(stack)}
-                className="group px-3.5 py-3 rounded-lg border border-slate-800/80 bg-slate-900/40 hover:bg-slate-900 hover:border-slate-700 transition-colors cursor-pointer flex items-center justify-between gap-3 shadow-sm"
-              >
-                <div className="flex items-center gap-2.5 min-w-0">
-                  <span
-                    className={`w-2 h-2 rounded-full flex-shrink-0 ${
-                      isAllRunning
-                        ? 'bg-emerald-400'
-                        : hasRunning
-                        ? 'bg-amber-400'
-                        : 'bg-slate-600'
-                    }`}
-                    title={isAllRunning ? 'Running' : hasRunning ? 'Partially Running' : 'Stopped'}
-                  />
-                  <span className="font-medium text-sm text-slate-200 group-hover:text-white truncate">
-                    {stack.name}
-                  </span>
-                </div>
+              return (
+                <div
+                  key={`${stack.hostId}-${stack.name}`}
+                  onClick={() => setSelectedStack(stack)}
+                  className="group px-3.5 py-3 rounded-lg border border-slate-800/80 bg-slate-900/40 hover:bg-slate-900 hover:border-slate-700 transition-colors cursor-pointer flex items-center justify-between gap-3 shadow-sm"
+                >
+                  <div className="flex items-center gap-2.5 min-w-0">
+                    <span
+                      className={`w-2 h-2 rounded-full flex-shrink-0 ${
+                        isAllRunning
+                          ? 'bg-emerald-400'
+                          : hasRunning
+                          ? 'bg-amber-400'
+                          : 'bg-slate-600'
+                      }`}
+                      title={isAllRunning ? 'Running' : hasRunning ? 'Partially Running' : 'Stopped'}
+                    />
+                    <span className="font-medium text-sm text-slate-200 group-hover:text-white truncate">
+                      {stack.name}
+                    </span>
+                  </div>
 
-                <div className="flex items-center gap-1.5 flex-shrink-0">
-                  {stack.source === 'managed' ? (
-                    <>
-                      <Badge
-                        variant="outline"
-                        className="text-[10px] font-mono bg-emerald-950/40 text-emerald-400 border-emerald-800/60"
-                      >
-                        Managed
-                      </Badge>
-                      {stack.takeover_pending && (
-                        <Badge
-                          variant="outline"
-                          className="text-[10px] font-mono bg-amber-950/40 text-amber-400 border-amber-800/60"
-                        >
-                          Takeover Pending
-                        </Badge>
-                      )}
-                    </>
-                  ) : (
+                  <div className="flex items-center gap-2 flex-shrink-0">
+                    {/* Management status icon indicators */}
+                    {stack.source === 'managed' && stack.pending_import ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-1 rounded text-amber-400 hover:text-amber-300 hover:bg-amber-950/40 transition-colors cursor-help inline-flex items-center"
+                            aria-label="Import Pending"
+                          >
+                            <AlertTriangle className="w-3.5 h-3.5" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="bg-slate-900 text-slate-200 border border-slate-700 max-w-xs text-xs p-2.5">
+                          <p className="font-semibold text-amber-300">Import Pending</p>
+                          <p className="text-[11px] text-slate-300 mt-1 leading-relaxed">
+                            Configuration imported, but containers are still running from the external directory. Run &apos;Up&apos; or &apos;Restart&apos; to redeploy.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : stack.source === 'external' ? (
+                      <Tooltip>
+                        <TooltipTrigger asChild>
+                          <span
+                            onClick={(e) => e.stopPropagation()}
+                            className="p-1 rounded text-slate-400 hover:text-slate-200 hover:bg-slate-800/60 transition-colors cursor-help inline-flex items-center"
+                            aria-label="Unmanaged Stack"
+                          >
+                            <HelpCircle className="w-3.5 h-3.5" />
+                          </span>
+                        </TooltipTrigger>
+                        <TooltipContent side="top" className="bg-slate-900 text-slate-200 border border-slate-700 max-w-xs text-xs p-2.5">
+                          <p className="font-semibold text-slate-200">Unmanaged Stack</p>
+                          <p className="text-[11px] text-slate-400 mt-1 leading-relaxed">
+                            Running externally on host. Open to view configuration and import into Dokidoki.
+                          </p>
+                        </TooltipContent>
+                      </Tooltip>
+                    ) : null}
+
                     <Badge
                       variant="outline"
-                      className="text-[10px] font-mono bg-slate-800/60 text-slate-400 border-slate-700/60"
+                      className="text-[11px] font-mono text-slate-400 border-slate-800 bg-slate-950/60"
                     >
-                      External
+                      {stack.hostName}
                     </Badge>
-                  )}
-
-                  <Badge
-                    variant="outline"
-                    className="text-[11px] font-mono text-slate-400 border-slate-800 bg-slate-950/60"
-                  >
-                    {stack.hostName}
-                  </Badge>
+                  </div>
                 </div>
-              </div>
-            );
-          })}
-        </div>
+              );
+            })}
+          </div>
+        </TooltipProvider>
       )}
 
       {/* Slide-over Sheet for Stack Detail */}

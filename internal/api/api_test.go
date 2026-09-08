@@ -1326,7 +1326,7 @@ type mockComposeRunner struct {
 	pullFn    func(ctx context.Context, path string, out io.Writer) error
 }
 
-func (m *mockComposeRunner) Up(ctx context.Context, path string, out io.Writer) error {
+func (m *mockComposeRunner) Up(ctx context.Context, path string, out io.Writer, extraArgs ...string) error {
 	if m.upFn != nil {
 		return m.upFn(ctx, path, out)
 	}

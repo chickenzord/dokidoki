@@ -135,7 +135,7 @@ func TestCategorize_ManagedStacks(t *testing.T) {
 	}
 }
 
-func TestCategorize_TakeoverPending(t *testing.T) {
+func TestCategorize_PendingImport(t *testing.T) {
 	discovered := []DiscoveredStack{
 		{
 			Name:           "my-app",
@@ -174,12 +174,12 @@ func TestCategorize_TakeoverPending(t *testing.T) {
 
 	result := Categorize(discovered, containers)
 	myAppDetail, ok := result.GetStack("my-app")
-	if !ok || !myAppDetail.TakeoverPending {
-		t.Errorf("expected my-app to have TakeoverPending=true, got ok=%v TakeoverPending=%v", ok, myAppDetail.TakeoverPending)
+	if !ok || !myAppDetail.PendingImport {
+		t.Errorf("expected my-app to have PendingImport=true, got ok=%v PendingImport=%v", ok, myAppDetail.PendingImport)
 	}
 	cleanAppDetail, ok := result.GetStack("clean-app")
-	if !ok || cleanAppDetail.TakeoverPending {
-		t.Errorf("expected clean-app to have TakeoverPending=false, got ok=%v TakeoverPending=%v", ok, cleanAppDetail.TakeoverPending)
+	if !ok || cleanAppDetail.PendingImport {
+		t.Errorf("expected clean-app to have PendingImport=false, got ok=%v PendingImport=%v", ok, cleanAppDetail.PendingImport)
 	}
 
 	// Test config_files outside expectedStackDir
@@ -197,8 +197,8 @@ func TestCategorize_TakeoverPending(t *testing.T) {
 	}
 	resultConfig := Categorize(discovered, containersConfigMismatch)
 	myAppDetail2, _ := resultConfig.GetStack("my-app")
-	if !myAppDetail2.TakeoverPending {
-		t.Errorf("expected my-app to have TakeoverPending=true when config_files differs")
+	if !myAppDetail2.PendingImport {
+		t.Errorf("expected my-app to have PendingImport=true when config_files differs")
 	}
 }
 
@@ -1711,15 +1711,15 @@ func TestService_GetContainerCompose(t *testing.T) {
 }
 
 type mockComposeRunner struct {
-	upFn      func(ctx context.Context, path string, out io.Writer) error
+	upFn      func(ctx context.Context, path string, out io.Writer, extraArgs ...string) error
 	downFn    func(ctx context.Context, path string, out io.Writer) error
 	restartFn func(ctx context.Context, path string, service string, out io.Writer) error
 	pullFn    func(ctx context.Context, path string, out io.Writer) error
 }
 
-func (m *mockComposeRunner) Up(ctx context.Context, path string, out io.Writer) error {
+func (m *mockComposeRunner) Up(ctx context.Context, path string, out io.Writer, extraArgs ...string) error {
 	if m.upFn != nil {
-		return m.upFn(ctx, path, out)
+		return m.upFn(ctx, path, out, extraArgs...)
 	}
 	if out != nil {
 		_, _ = out.Write([]byte("up success\n"))
@@ -1881,6 +1881,53 @@ func TestService_ComposeOperations(t *testing.T) {
 		}
 		if !res.Success {
 			t.Errorf("expected success true")
+		}
+	})
+
+	t.Run("ComposeRestart_PendingImportDelegatesToUp", func(t *testing.T) {
+		var upCalled bool
+		var extraPassed []string
+		mockR := &mockComposeRunner{
+			upFn: func(ctx context.Context, path string, out io.Writer, extraArgs ...string) error {
+				upCalled = true
+				extraPassed = extraArgs
+				return nil
+			},
+		}
+		mockDocker := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    "c-pending",
+						Names: []string{"/mystack-web-1"},
+						State: "running",
+						Labels: map[string]string{
+							"com.docker.compose.project":             "mystack",
+							"com.docker.compose.project.working_dir": "/external/dir/mystack",
+						},
+					},
+				}, nil
+			},
+		}
+		svcWithPending := NewService(NewScanner(tempDir), mockDocker, "", WithComposeRunner(mockR))
+		res, err := svcWithPending.ComposeRestart(ctx, "mystack", "", nil)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+		if !upCalled {
+			t.Errorf("expected ComposeRestart on pending import to call Up")
+		}
+		var hasForceRecreate bool
+		for _, arg := range extraPassed {
+			if arg == "--force-recreate" {
+				hasForceRecreate = true
+			}
+		}
+		if !hasForceRecreate {
+			t.Errorf("expected --force-recreate to be passed to Up on pending import stack, got %v", extraPassed)
 		}
 	})
 

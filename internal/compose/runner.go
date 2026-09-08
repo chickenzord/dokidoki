@@ -17,7 +17,7 @@ const DefaultBin = "docker compose"
 
 // Runner defines the interface for executing docker compose operations.
 type Runner interface {
-	Up(ctx context.Context, composePath string, out io.Writer) error
+	Up(ctx context.Context, composePath string, out io.Writer, extraArgs ...string) error
 	Down(ctx context.Context, composePath string, out io.Writer) error
 	Restart(ctx context.Context, composePath string, service string, out io.Writer) error
 	Pull(ctx context.Context, composePath string, out io.Writer) error
@@ -140,9 +140,10 @@ func (r *CommandRunner) run(ctx context.Context, composePath string, out io.Writ
 	return nil
 }
 
-// Up runs `up -d --remove-orphans` on the specified compose file.
-func (r *CommandRunner) Up(ctx context.Context, composePath string, out io.Writer) error {
-	return r.run(ctx, composePath, out, "up", "-d", "--remove-orphans")
+// Up runs `up -d --remove-orphans` on the specified compose file, appending any extraArgs.
+func (r *CommandRunner) Up(ctx context.Context, composePath string, out io.Writer, extraArgs ...string) error {
+	args := append([]string{"up", "-d", "--remove-orphans"}, extraArgs...)
+	return r.run(ctx, composePath, out, args...)
 }
 
 // Down runs `down` on the specified compose file.
