@@ -311,8 +311,7 @@ func TestCancellation(t *testing.T) {
 	t.Run("cancellation during execution", func(t *testing.T) {
 		script := `
 echo "started"
-sleep 5
-echo "finished"
+exec sleep 5
 `
 		binPath := createMockExecutable(t, script)
 		r := NewRunner(binPath, "")
