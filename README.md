@@ -9,6 +9,7 @@
 </p>
 
 <p align="center">
+  <a href="https://github.com/chickenzord/dokidoki/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/chickenzord/dokidoki/ci.yml?branch=main" alt="CI Status" /></a>
   <a href="https://github.com/chickenzord/dokidoki/actions/workflows/docker.yml"><img src="https://img.shields.io/github/actions/workflow/status/chickenzord/dokidoki/docker.yml?branch=main" alt="Build Status" /></a>
   <a href="https://github.com/chickenzord/dokidoki/pkgs/container/dokidoki"><img src="https://img.shields.io/badge/docker-ghcr.io%2Fchickenzord%2Fdokidoki-blue?logo=docker" alt="Docker Image" /></a>
   <a href="https://codecov.io/gh/chickenzord/dokidoki"><img src="https://codecov.io/gh/chickenzord/dokidoki/branch/main/graph/badge.svg" alt="codecov" /></a>
