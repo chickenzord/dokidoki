@@ -130,6 +130,19 @@ DOKIDOKI_CLUSTER_TOKEN=secret-token-123
 DOKIDOKI_LOG_FORMAT=json
 ```
 
+### Via CLI Flags
+
+```bash
+dokidoki \
+  -port 8080 \
+  -stacks-dir /opt/stacks \
+  -node-name node-01 \
+  -advertise-addr http://192.168.1.50:8080 \
+  -peers http://192.168.1.10:8080 \
+  -cluster-token my-secure-cluster-token \
+  -log-level info
+```
+
 ---
 
 ## Related Documentation
