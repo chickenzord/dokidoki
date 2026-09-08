@@ -193,12 +193,40 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
                   </span>
                 </div>
 
-                <Badge
-                  variant="outline"
-                  className="text-[11px] font-mono text-slate-400 border-slate-800 bg-slate-950/60 flex-shrink-0"
-                >
-                  {stack.hostName}
-                </Badge>
+                <div className="flex items-center gap-1.5 flex-shrink-0">
+                  {stack.source === 'managed' ? (
+                    <>
+                      <Badge
+                        variant="outline"
+                        className="text-[10px] font-mono bg-emerald-950/40 text-emerald-400 border-emerald-800/60"
+                      >
+                        Managed
+                      </Badge>
+                      {stack.takeover_pending && (
+                        <Badge
+                          variant="outline"
+                          className="text-[10px] font-mono bg-amber-950/40 text-amber-400 border-amber-800/60"
+                        >
+                          Takeover Pending
+                        </Badge>
+                      )}
+                    </>
+                  ) : (
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] font-mono bg-slate-800/60 text-slate-400 border-slate-700/60"
+                    >
+                      External
+                    </Badge>
+                  )}
+
+                  <Badge
+                    variant="outline"
+                    className="text-[11px] font-mono text-slate-400 border-slate-800 bg-slate-950/60"
+                  >
+                    {stack.hostName}
+                  </Badge>
+                </div>
               </div>
             );
           })}

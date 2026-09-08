@@ -12,9 +12,11 @@ import (
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	errdefs "github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 func TestCalculateRollup(t *testing.T) {
@@ -130,6 +132,73 @@ func TestCategorize_ManagedStacks(t *testing.T) {
 	d2, ok := result.GetStack("app-two")
 	if !ok || len(d2.Containers) != 0 {
 		t.Errorf("expected 0 containers in detail for app-two, got %v", d2)
+	}
+}
+
+func TestCategorize_TakeoverPending(t *testing.T) {
+	discovered := []DiscoveredStack{
+		{
+			Name:           "my-app",
+			ComposePath:    "/opt/dokidoki/stacks/my-app/compose.yaml",
+			ComposePresent: true,
+		},
+		{
+			Name:           "clean-app",
+			ComposePath:    "/opt/dokidoki/stacks/clean-app/compose.yaml",
+			ComposePresent: true,
+		},
+	}
+
+	containers := []docker.Container{
+		{
+			ID:      "c1",
+			Name:    "my-app-web-1",
+			Stack:   "my-app",
+			Service: "web",
+			State:   "running",
+			Labels: map[string]string{
+				"com.docker.compose.project.working_dir": "/opt/other/path/my-app",
+			},
+		},
+		{
+			ID:      "c2",
+			Name:    "clean-app-web-1",
+			Stack:   "clean-app",
+			Service: "web",
+			State:   "running",
+			Labels: map[string]string{
+				"com.docker.compose.project.working_dir": "/opt/dokidoki/stacks/clean-app",
+			},
+		},
+	}
+
+	result := Categorize(discovered, containers)
+	myAppDetail, ok := result.GetStack("my-app")
+	if !ok || !myAppDetail.TakeoverPending {
+		t.Errorf("expected my-app to have TakeoverPending=true, got ok=%v TakeoverPending=%v", ok, myAppDetail.TakeoverPending)
+	}
+	cleanAppDetail, ok := result.GetStack("clean-app")
+	if !ok || cleanAppDetail.TakeoverPending {
+		t.Errorf("expected clean-app to have TakeoverPending=false, got ok=%v TakeoverPending=%v", ok, cleanAppDetail.TakeoverPending)
+	}
+
+	// Test config_files outside expectedStackDir
+	containersConfigMismatch := []docker.Container{
+		{
+			ID:      "c3",
+			Name:    "my-app-web-1",
+			Stack:   "my-app",
+			Service: "web",
+			State:   "running",
+			Labels: map[string]string{
+				"com.docker.compose.project.config_files": "/opt/outside/docker-compose.yml",
+			},
+		},
+	}
+	resultConfig := Categorize(discovered, containersConfigMismatch)
+	myAppDetail2, _ := resultConfig.GetStack("my-app")
+	if !myAppDetail2.TakeoverPending {
+		t.Errorf("expected my-app to have TakeoverPending=true when config_files differs")
 	}
 }
 
@@ -606,6 +675,10 @@ type mockDockerClient struct {
 	pingFn             func(ctx context.Context) (types.Ping, error)
 	serverVersionFn    func(ctx context.Context) (types.Version, error)
 	infoFn             func(ctx context.Context) (system.Info, error)
+	createContainerFn  func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error)
+	waitContainerFn    func(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	containerLogsFn    func(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
+	removeContainerFn  func(ctx context.Context, id string, options container.RemoveOptions) error
 }
 
 func (m *mockDockerClient) Ping(ctx context.Context) (types.Ping, error) {
@@ -652,6 +725,37 @@ func (m *mockDockerClient) StartContainer(ctx context.Context, id string) error 
 }
 
 func (m *mockDockerClient) StopContainer(ctx context.Context, id string, timeout *int) error {
+	return nil
+}
+
+func (m *mockDockerClient) CreateContainer(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error) {
+	if m.createContainerFn != nil {
+		return m.createContainerFn(ctx, config, hostConfig, networkingConfig, platform, containerName)
+	}
+	return container.CreateResponse{}, nil
+}
+
+func (m *mockDockerClient) WaitContainer(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+	if m.waitContainerFn != nil {
+		return m.waitContainerFn(ctx, id, condition)
+	}
+	resCh := make(chan container.WaitResponse, 1)
+	errCh := make(chan error, 1)
+	resCh <- container.WaitResponse{StatusCode: 0}
+	return resCh, errCh
+}
+
+func (m *mockDockerClient) ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+	if m.containerLogsFn != nil {
+		return m.containerLogsFn(ctx, id, options)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (m *mockDockerClient) RemoveContainer(ctx context.Context, id string, options container.RemoveOptions) error {
+	if m.removeContainerFn != nil {
+		return m.removeContainerFn(ctx, id, options)
+	}
 	return nil
 }
 
@@ -1055,7 +1159,7 @@ func TestService_GetStackFiles(t *testing.T) {
 		scanner := NewScanner(tempDir)
 		svc := NewService(scanner, &mockDockerClient{}, "")
 
-		resp, err := svc.GetStackFiles(ctx, "managed-app")
+		resp, err := svc.GetStackFiles(ctx, "managed-app", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
@@ -1082,7 +1186,7 @@ func TestService_GetStackFiles(t *testing.T) {
 		}
 	})
 
-	t.Run("ExternalStack_InaccessiblePath_Stubbed", func(t *testing.T) {
+	t.Run("ExternalStack_NoForceRead", func(t *testing.T) {
 		m := &mockDockerClient{
 			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
 				return []types.Container{
@@ -1092,7 +1196,7 @@ func TestService_GetStackFiles(t *testing.T) {
 						Labels: map[string]string{
 							docker.ComposeProjectLabel:              "external-app",
 							docker.ComposeServiceLabel:              "web",
-							"com.docker.compose.project.config_files": "/host/outside/volume/docker-compose.yml",
+							"com.docker.compose.project.working_dir": "/host/external/path",
 						},
 					},
 				}, nil
@@ -1103,34 +1207,24 @@ func TestService_GetStackFiles(t *testing.T) {
 		scanner := NewScanner(tempDir)
 		svc := NewService(scanner, m, "")
 
-		resp, err := svc.GetStackFiles(ctx, "external-app")
+		resp, err := svc.GetStackFiles(ctx, "external-app", false)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 
-		if len(resp.Files) != 1 {
-			t.Fatalf("expected 1 stubbed compose file, got %d", len(resp.Files))
+		if resp.Dir != "/host/external/path" {
+			t.Errorf("expected dir /host/external/path, got %s", resp.Dir)
 		}
-
-		file := resp.Files[0]
-		if file.Name != "compose.yaml" || !file.IsCompose {
-			t.Errorf("expected compose.yaml with IsCompose=true, got %+v", file)
-		}
-		if !strings.Contains(file.Content, "# External stack detected: external-app") {
-			t.Errorf("expected external stack comment, got %s", file.Content)
-		}
-		if !strings.Contains(file.Content, "# Host compose path: /host/outside/volume/docker-compose.yml") {
-			t.Errorf("expected detectedPath comment, got %s", file.Content)
-		}
-		if !strings.Contains(file.Content, "# Note: Path is outside Dokidoki volume mount.") {
-			t.Errorf("expected volume mount note, got %s", file.Content)
+		if len(resp.Files) != 0 {
+			t.Fatalf("expected 0 files when forceRead=false, got %d", len(resp.Files))
 		}
 	})
 
-	t.Run("ExternalStack_AccessiblePath", func(t *testing.T) {
+	t.Run("ExternalStack_ForceRead_BareMetal", func(t *testing.T) {
 		extDir := t.TempDir()
 		realComposePath := filepath.Join(extDir, "docker-compose.yml")
 		_ = os.WriteFile(realComposePath, []byte("services:\n  ext:\n    image: alpine\n"), 0644)
+		_ = os.WriteFile(filepath.Join(extDir, ".env"), []byte("FOO=BAR\n"), 0644)
 
 		m := &mockDockerClient{
 			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
@@ -1141,7 +1235,7 @@ func TestService_GetStackFiles(t *testing.T) {
 						Labels: map[string]string{
 							docker.ComposeProjectLabel:              "accessible-ext",
 							docker.ComposeServiceLabel:              "web",
-							"com.docker.compose.project.config_files": realComposePath,
+							"com.docker.compose.project.working_dir": extDir,
 						},
 					},
 				}, nil
@@ -1150,17 +1244,152 @@ func TestService_GetStackFiles(t *testing.T) {
 
 		tempDir := t.TempDir()
 		scanner := NewScanner(tempDir)
-		svc := NewService(scanner, m, "")
+		svc := NewService(scanner, m, "") // bare-metal
 
-		resp, err := svc.GetStackFiles(ctx, "accessible-ext")
+		resp, err := svc.GetStackFiles(ctx, "accessible-ext", true)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if resp.Dir != extDir {
+			t.Errorf("expected dir %s, got %s", extDir, resp.Dir)
+		}
+		if len(resp.Files) != 2 {
+			t.Fatalf("expected 2 files, got %d", len(resp.Files))
+		}
+		if !strings.Contains(resp.Files[0].Content, "image: alpine") {
+			t.Errorf("expected compose file content, got %s", resp.Files[0].Content)
+		}
+	})
+
+	t.Run("ExternalStack_ForceRead_Containerized_Success", func(t *testing.T) {
+		removedContainerID := ""
+		m := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    "ext-c3",
+						Names: []string{"/ext3_web_1"},
+						Labels: map[string]string{
+							docker.ComposeProjectLabel:              "ext-containerized",
+							docker.ComposeServiceLabel:              "web",
+							"com.docker.compose.project.working_dir": "/host/my-stack",
+						},
+					},
+				}, nil
+			},
+			inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+				if id == "self-cid-123" {
+					return types.ContainerJSON{
+						Config: &container.Config{
+							Image:      "dokidoki:v0.1.0",
+							Entrypoint: []string{"dokidoki"},
+						},
+					}, nil
+				}
+				return types.ContainerJSON{}, ErrContainerNotFound
+			},
+			createContainerFn: func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error) {
+				if config.Image != "dokidoki:v0.1.0" {
+					t.Errorf("expected image dokidoki:v0.1.0, got %s", config.Image)
+				}
+				if len(config.Cmd) < 2 || config.Cmd[0] != "read-files" || config.Cmd[1] != "/mnt/target" {
+					t.Errorf("unexpected cmd: %+v", config.Cmd)
+				}
+				if len(hostConfig.Binds) != 1 || hostConfig.Binds[0] != "/host/my-stack:/mnt/target:ro" {
+					t.Errorf("unexpected binds: %+v", hostConfig.Binds)
+				}
+				return container.CreateResponse{ID: "temp-helper-cid"}, nil
+			},
+			waitContainerFn: func(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+				resCh := make(chan container.WaitResponse, 1)
+				errCh := make(chan error, 1)
+				resCh <- container.WaitResponse{StatusCode: 0}
+				return resCh, errCh
+			},
+			containerLogsFn: func(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+				filesJSON := `[{"name":"compose.yaml","path":"/mnt/target/compose.yaml","size":25,"content":"services:\n  web:\n    image: nginx","isCompose":true,"isEnv":false}]`
+				return io.NopCloser(strings.NewReader(filesJSON)), nil
+			},
+			removeContainerFn: func(ctx context.Context, id string, options container.RemoveOptions) error {
+				removedContainerID = id
+				return nil
+			},
+		}
+
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, m, "self-cid-123")
+
+		resp, err := svc.GetStackFiles(ctx, "ext-containerized", true)
 		if err != nil {
 			t.Fatalf("unexpected error: %v", err)
 		}
 		if len(resp.Files) != 1 {
 			t.Fatalf("expected 1 file, got %d", len(resp.Files))
 		}
-		if !strings.Contains(resp.Files[0].Content, "image: alpine") {
-			t.Errorf("expected real file content, got %s", resp.Files[0].Content)
+		if resp.Files[0].Name != "compose.yaml" || !resp.Files[0].IsCompose {
+			t.Errorf("unexpected file: %+v", resp.Files[0])
+		}
+		if resp.Files[0].Path != "/host/my-stack/compose.yaml" {
+			t.Errorf("expected path to be rewritten to hostDir, got %s", resp.Files[0].Path)
+		}
+		if removedContainerID != "temp-helper-cid" {
+			t.Errorf("expected temp container to be cleaned up, got removedContainerID=%q", removedContainerID)
+		}
+	})
+
+	t.Run("ExternalStack_ForceRead_Containerized_ErrorExit", func(t *testing.T) {
+		removedContainerID := ""
+		m := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    "ext-c4",
+						Names: []string{"/ext4_web_1"},
+						Labels: map[string]string{
+							docker.ComposeProjectLabel:              "ext-fail",
+							docker.ComposeServiceLabel:              "web",
+							"com.docker.compose.project.working_dir": "/host/fail-stack",
+						},
+					},
+				}, nil
+			},
+			inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+				return types.ContainerJSON{
+					Config: &container.Config{Image: "dokidoki:v0.1.0"},
+				}, nil
+			},
+			createContainerFn: func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error) {
+				return container.CreateResponse{ID: "fail-helper-cid"}, nil
+			},
+			waitContainerFn: func(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+				resCh := make(chan container.WaitResponse, 1)
+				errCh := make(chan error, 1)
+				resCh <- container.WaitResponse{StatusCode: 1}
+				return resCh, errCh
+			},
+			containerLogsFn: func(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+				return io.NopCloser(strings.NewReader("permission denied")), nil
+			},
+			removeContainerFn: func(ctx context.Context, id string, options container.RemoveOptions) error {
+				removedContainerID = id
+				return nil
+			},
+		}
+
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, m, "self-cid-123")
+
+		_, err := svc.GetStackFiles(ctx, "ext-fail", true)
+		if err == nil {
+			t.Fatal("expected error on non-zero container exit, got nil")
+		}
+		if !strings.Contains(err.Error(), "1") || !strings.Contains(err.Error(), "permission denied") {
+			t.Errorf("expected error details containing status code and logs, got %v", err)
+		}
+		if removedContainerID != "fail-helper-cid" {
+			t.Errorf("expected container to be cleaned up on error, got %q", removedContainerID)
 		}
 	})
 
@@ -1169,7 +1398,7 @@ func TestService_GetStackFiles(t *testing.T) {
 		scanner := NewScanner(tempDir)
 		svc := NewService(scanner, &mockDockerClient{}, "")
 
-		_, err := svc.GetStackFiles(ctx, "unknown-stack")
+		_, err := svc.GetStackFiles(ctx, "unknown-stack", false)
 		if !errors.Is(err, ErrNotFound) {
 			t.Fatalf("expected ErrNotFound, got %v", err)
 		}
@@ -1271,14 +1500,23 @@ func TestService_GetStackFile(t *testing.T) {
 func TestService_CreateOrImportStack(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("CreateWithContent", func(t *testing.T) {
+	t.Run("CreateWithFiles", func(t *testing.T) {
 		tempDir := t.TempDir()
 		scanner := NewScanner(tempDir)
 		svc := NewService(scanner, &mockDockerClient{}, "")
 
 		req := CreateStackRequest{
-			Name:    "new-custom-stack",
-			Content: "services:\n  redis:\n    image: redis:alpine\n",
+			Name: "new-custom-stack",
+			Files: []CreateStackFile{
+				{
+					Name:    "compose.yaml",
+					Content: "services:\n  redis:\n    image: redis:alpine\n",
+				},
+				{
+					Name:    ".env",
+					Content: "PORT=6379\n",
+				},
+			},
 		}
 
 		summary, err := svc.CreateOrImportStack(ctx, req)
@@ -1290,23 +1528,37 @@ func TestService_CreateOrImportStack(t *testing.T) {
 			t.Errorf("unexpected summary: %+v", summary)
 		}
 
-		// Verify file written
-		data, err := os.ReadFile(filepath.Join(tempDir, "new-custom-stack", "compose.yaml"))
+		// Verify files written
+		composeData, err := os.ReadFile(filepath.Join(tempDir, "new-custom-stack", "compose.yaml"))
 		if err != nil {
 			t.Fatalf("failed to read created compose file: %v", err)
 		}
-		if !strings.Contains(string(data), "image: redis:alpine") {
-			t.Errorf("unexpected file content: %s", string(data))
+		if !strings.Contains(string(composeData), "image: redis:alpine") {
+			t.Errorf("unexpected file content: %s", string(composeData))
+		}
+
+		envData, err := os.ReadFile(filepath.Join(tempDir, "new-custom-stack", ".env"))
+		if err != nil {
+			t.Fatalf("failed to read created .env file: %v", err)
+		}
+		if !strings.Contains(string(envData), "PORT=6379") {
+			t.Errorf("unexpected .env content: %s", string(envData))
 		}
 	})
 
-	t.Run("CreateWithEmptyContent_StarterTemplate", func(t *testing.T) {
+	t.Run("CreateWithoutCompose_WritesDefaultCompose", func(t *testing.T) {
 		tempDir := t.TempDir()
 		scanner := NewScanner(tempDir)
 		svc := NewService(scanner, &mockDockerClient{}, "")
 
 		req := CreateStackRequest{
 			Name: "starter-stack",
+			Files: []CreateStackFile{
+				{
+					Name:    ".env",
+					Content: "KEY=VALUE\n",
+				},
+			},
 		}
 
 		summary, err := svc.CreateOrImportStack(ctx, req)
@@ -1327,55 +1579,36 @@ func TestService_CreateOrImportStack(t *testing.T) {
 		}
 	})
 
-	t.Run("ImportExternalStack", func(t *testing.T) {
-		m := &mockDockerClient{
-			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
-				return []types.Container{
-					{
-						ID:    "ext-cid-1",
-						Names: []string{"/ext_app_1"},
-						Labels: map[string]string{
-							docker.ComposeProjectLabel: "ext-to-import",
-							docker.ComposeServiceLabel: "app",
-						},
-					},
-				}, nil
-			},
-			inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
-				return types.ContainerJSON{
-					ContainerJSONBase: &types.ContainerJSONBase{
-						ID:   "ext-cid-1",
-						Name: "/ext_app_1",
-					},
-					Config: &container.Config{
-						Image: "golang:1.24",
-						Labels: map[string]string{
-							docker.ComposeProjectLabel: "ext-to-import",
-							docker.ComposeServiceLabel: "app",
-						},
-					},
-				}, nil
-			},
-		}
-
+	t.Run("PathTraversalInFileName", func(t *testing.T) {
 		tempDir := t.TempDir()
 		scanner := NewScanner(tempDir)
-		svc := NewService(scanner, m, "")
+		svc := NewService(scanner, &mockDockerClient{}, "")
 
-		// Initial check: it is external
-		detail, err := svc.GetStack(ctx, "ext-to-import")
-		if err != nil || detail.Source != string(SourceExternal) {
-			t.Fatalf("expected stack to initially be external, got err=%v detail=%+v", err, detail)
+		traversalReqs := []CreateStackRequest{
+			{Name: "valid-name", Files: []CreateStackFile{{Name: "../evil", Content: "bad"}}},
+			{Name: "valid-name", Files: []CreateStackFile{{Name: "/etc/passwd", Content: "bad"}}},
+			{Name: "valid-name", Files: []CreateStackFile{{Name: "sub\\file", Content: "bad"}}},
+			{Name: "valid-name", Files: []CreateStackFile{{Name: "sub/file", Content: "bad"}}},
+			{Name: "valid-name", Files: []CreateStackFile{{Name: "", Content: "bad"}}},
+			{Name: "valid-name", Files: []CreateStackFile{{Name: ".", Content: "bad"}}},
 		}
 
-		// Import it
-		summary, err := svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "ext-to-import"})
-		if err != nil {
-			t.Fatalf("failed to import stack: %v", err)
+		for _, req := range traversalReqs {
+			_, err := svc.CreateOrImportStack(ctx, req)
+			if err == nil {
+				t.Errorf("expected error for file name %q, got nil", req.Files[0].Name)
+			}
 		}
+	})
 
-		if summary.Source != string(SourceManaged) {
-			t.Errorf("expected stack to be managed after import, got %s", summary.Source)
+	t.Run("EmptyFiles", func(t *testing.T) {
+		tempDir := t.TempDir()
+		scanner := NewScanner(tempDir)
+		svc := NewService(scanner, &mockDockerClient{}, "")
+
+		_, err := svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "no-files", Files: []CreateStackFile{}})
+		if err == nil {
+			t.Error("expected error for empty files slice, got nil")
 		}
 	})
 
@@ -1384,17 +1617,17 @@ func TestService_CreateOrImportStack(t *testing.T) {
 		scanner := NewScanner(tempDir)
 		svc := NewService(scanner, &mockDockerClient{}, "")
 
-		_, err := svc.CreateOrImportStack(ctx, CreateStackRequest{Name: ""})
+		_, err := svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "", Files: []CreateStackFile{{Name: "compose.yaml", Content: "test"}}})
 		if err == nil {
 			t.Error("expected error for empty name")
 		}
 
-		_, err = svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "../traversal"})
+		_, err = svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "../traversal", Files: []CreateStackFile{{Name: "compose.yaml", Content: "test"}}})
 		if err == nil {
 			t.Error("expected error for path traversal name")
 		}
 
-		_, err = svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "bad name with spaces"})
+		_, err = svc.CreateOrImportStack(ctx, CreateStackRequest{Name: "bad name with spaces", Files: []CreateStackFile{{Name: "compose.yaml", Content: "test"}}})
 		if err == nil {
 			t.Error("expected error for invalid characters")
 		}

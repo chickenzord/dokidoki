@@ -8,7 +8,10 @@ import (
 	"testing"
 
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // Ensure ClientWrapper and MockClient implement Client interface at compile time.
@@ -39,6 +42,10 @@ type MockClient struct {
 	RestartContainerFunc func(ctx context.Context, id string, timeout *int) error
 	StartContainerFunc   func(ctx context.Context, id string) error
 	StopContainerFunc    func(ctx context.Context, id string, timeout *int) error
+	CreateContainerFunc  func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error)
+	WaitContainerFunc    func(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	ContainerLogsFunc    func(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
+	RemoveContainerFunc  func(ctx context.Context, id string, options container.RemoveOptions) error
 	PullImageFunc        func(ctx context.Context, imageRef string) (io.ReadCloser, error)
 	ServerVersionFunc    func(ctx context.Context) (types.Version, error)
 	InfoFunc             func(ctx context.Context) (system.Info, error)
@@ -83,6 +90,37 @@ func (m *MockClient) StartContainer(ctx context.Context, id string) error {
 func (m *MockClient) StopContainer(ctx context.Context, id string, timeout *int) error {
 	if m.StopContainerFunc != nil {
 		return m.StopContainerFunc(ctx, id, timeout)
+	}
+	return nil
+}
+
+func (m *MockClient) CreateContainer(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error) {
+	if m.CreateContainerFunc != nil {
+		return m.CreateContainerFunc(ctx, config, hostConfig, networkingConfig, platform, containerName)
+	}
+	return container.CreateResponse{}, nil
+}
+
+func (m *MockClient) WaitContainer(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+	if m.WaitContainerFunc != nil {
+		return m.WaitContainerFunc(ctx, id, condition)
+	}
+	resCh := make(chan container.WaitResponse, 1)
+	errCh := make(chan error, 1)
+	resCh <- container.WaitResponse{StatusCode: 0}
+	return resCh, errCh
+}
+
+func (m *MockClient) ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+	if m.ContainerLogsFunc != nil {
+		return m.ContainerLogsFunc(ctx, id, options)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (m *MockClient) RemoveContainer(ctx context.Context, id string, options container.RemoveOptions) error {
+	if m.RemoveContainerFunc != nil {
+		return m.RemoveContainerFunc(ctx, id, options)
 	}
 	return nil
 }
@@ -228,6 +266,95 @@ func TestMockClient_ContainerAndImageMethods(t *testing.T) {
 		}
 		if !errors.Is(err, expectedErr) {
 			t.Errorf("expected error %v, got %v", expectedErr, err)
+		}
+	})
+
+	t.Run("CreateContainer", func(t *testing.T) {
+		mock := &MockClient{}
+		resp, err := mock.CreateContainer(ctx, nil, nil, nil, nil, "")
+		if err != nil || resp.ID != "" {
+			t.Fatalf("expected empty create response on default mock, got %v, %v", resp, err)
+		}
+
+		called := false
+		mock.CreateContainerFunc = func(c context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error) {
+			called = true
+			if containerName != "my-container" {
+				t.Errorf("expected name my-container, got %s", containerName)
+			}
+			return container.CreateResponse{ID: "created-id-123"}, nil
+		}
+
+		res, err := mock.CreateContainer(ctx, nil, nil, nil, nil, "my-container")
+		if !called || err != nil || res.ID != "created-id-123" {
+			t.Errorf("unexpected create container response: %v, %v", res, err)
+		}
+	})
+
+	t.Run("WaitContainer", func(t *testing.T) {
+		mock := &MockClient{}
+		resCh, errCh := mock.WaitContainer(ctx, "c1", container.WaitConditionNotRunning)
+		select {
+		case res := <-resCh:
+			if res.StatusCode != 0 {
+				t.Errorf("expected status 0 on default mock, got %d", res.StatusCode)
+			}
+		case err := <-errCh:
+			t.Fatalf("unexpected error: %v", err)
+		}
+
+		mock.WaitContainerFunc = func(c context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+			rCh := make(chan container.WaitResponse, 1)
+			eCh := make(chan error, 1)
+			rCh <- container.WaitResponse{StatusCode: 42}
+			return rCh, eCh
+		}
+		resCh2, _ := mock.WaitContainer(ctx, "c2", container.WaitConditionNotRunning)
+		res2 := <-resCh2
+		if res2.StatusCode != 42 {
+			t.Errorf("expected status 42, got %d", res2.StatusCode)
+		}
+	})
+
+	t.Run("ContainerLogs", func(t *testing.T) {
+		mock := &MockClient{}
+		rc, err := mock.ContainerLogs(ctx, "c1", container.LogsOptions{})
+		if err != nil || rc == nil {
+			t.Fatalf("expected reader on default mock, got %v, %v", rc, err)
+		}
+		_ = rc.Close()
+
+		mock.ContainerLogsFunc = func(c context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+			return io.NopCloser(strings.NewReader("log content")), nil
+		}
+		rc2, err := mock.ContainerLogs(ctx, "c1", container.LogsOptions{ShowStdout: true})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		defer rc2.Close()
+		data, _ := io.ReadAll(rc2)
+		if string(data) != "log content" {
+			t.Errorf("expected 'log content', got %q", string(data))
+		}
+	})
+
+	t.Run("RemoveContainer", func(t *testing.T) {
+		mock := &MockClient{}
+		if err := mock.RemoveContainer(ctx, "c1", container.RemoveOptions{}); err != nil {
+			t.Fatalf("expected nil error on default mock, got: %v", err)
+		}
+
+		called := false
+		mock.RemoveContainerFunc = func(c context.Context, id string, options container.RemoveOptions) error {
+			called = true
+			if id != "c1" || !options.Force {
+				t.Errorf("unexpected args: %s, %+v", id, options)
+			}
+			return nil
+		}
+		err := mock.RemoveContainer(ctx, "c1", container.RemoveOptions{Force: true})
+		if !called || err != nil {
+			t.Errorf("expected successful RemoveContainerFunc call, got %v", err)
 		}
 	})
 }

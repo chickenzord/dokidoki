@@ -37,41 +37,30 @@ func DetectCandidateAddresses(bindAddr string, port int, configured []string) []
 	seen := make(map[string]bool)
 	var candidates []string
 
-	ifaces, err := net.Interfaces()
+	addrs, err := net.InterfaceAddrs()
 	if err == nil {
-		for _, iface := range ifaces {
-			if iface.Flags&net.FlagUp == 0 || iface.Flags&net.FlagLoopback != 0 {
+		for _, a := range addrs {
+			var ip net.IP
+			switch v := a.(type) {
+			case *net.IPNet:
+				ip = v.IP
+			case *net.IPAddr:
+				ip = v.IP
+			}
+
+			if ip == nil {
 				continue
 			}
 
-			addrs, err := iface.Addrs()
-			if err != nil {
+			ip4 := ip.To4()
+			if ip4 == nil || ip4.IsLoopback() || ip4.IsMulticast() || ip4.IsUnspecified() {
 				continue
 			}
 
-			for _, a := range addrs {
-				var ip net.IP
-				switch v := a.(type) {
-				case *net.IPNet:
-					ip = v.IP
-				case *net.IPAddr:
-					ip = v.IP
-				}
-
-				if ip == nil {
-					continue
-				}
-
-				ip4 := ip.To4()
-				if ip4 == nil || ip4.IsLoopback() || ip4.IsMulticast() || ip4.IsUnspecified() {
-					continue
-				}
-
-				cand := fmt.Sprintf("http://%s:%d", ip4.String(), port)
-				if !seen[cand] {
-					seen[cand] = true
-					candidates = append(candidates, cand)
-				}
+			cand := fmt.Sprintf("http://%s:%d", ip4.String(), port)
+			if !seen[cand] {
+				seen[cand] = true
+				candidates = append(candidates, cand)
 			}
 		}
 	}

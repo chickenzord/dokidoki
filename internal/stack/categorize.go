@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"path/filepath"
 	"sort"
 	"strings"
 
@@ -124,13 +125,32 @@ func Categorize(discovered []Discovered, containers []docker.Container) *Categor
 		rollup := CalculateRollup(cList)
 		services := extractServices(cList)
 
+		takeoverPending := false
+		if len(cList) > 0 {
+			expectedStackDir := filepath.Dir(d.ComposePath)
+			cleanExpectedDir := filepath.Clean(expectedStackDir)
+			for _, c := range cList {
+				workingDir := c.Labels["com.docker.compose.project.working_dir"]
+				configFiles := c.Labels["com.docker.compose.project.config_files"]
+
+				if workingDir != "" && filepath.Clean(workingDir) != cleanExpectedDir {
+					takeoverPending = true
+					break
+				} else if configFiles != "" && !strings.HasPrefix(filepath.Clean(configFiles), cleanExpectedDir) {
+					takeoverPending = true
+					break
+				}
+			}
+		}
+
 		summary := Summary{
-			Name:           d.Name,
-			Source:         string(SourceManaged),
-			ComposePresent: d.ComposePresent,
-			ComposePath:    d.ComposePath,
-			Rollup:         rollup,
-			Services:       services,
+			Name:            d.Name,
+			Source:          string(SourceManaged),
+			ComposePresent:  d.ComposePresent,
+			ComposePath:     d.ComposePath,
+			Rollup:          rollup,
+			Services:        services,
+			TakeoverPending: takeoverPending,
 		}
 
 		detail := Detail{

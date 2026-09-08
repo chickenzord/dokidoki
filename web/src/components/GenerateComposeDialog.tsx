@@ -71,7 +71,12 @@ export const GenerateComposeDialog: React.FC<GenerateComposeDialogProps> = ({
       await createStackMutation.mutateAsync({
         data: {
           name: stackName.trim(),
-          content: composeContent,
+          files: [
+            {
+              name: 'compose.yaml',
+              content: composeContent,
+            },
+          ],
         },
         hostEndpoint: container.hostEndpoint,
       });

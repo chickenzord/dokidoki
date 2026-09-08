@@ -109,13 +109,40 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
   });
 }
 
-export function useStackFilesQuery(hostEndpoint: string, stackName: string) {
+export function useStackFilesQuery(
+  hostEndpoint: string,
+  stackName: string,
+  options?: { enabled?: boolean; read?: boolean }
+) {
+  const isEnabled = (options?.enabled !== undefined ? options.enabled : true) && Boolean(stackName);
   return useQuery({
-    queryKey: ['stack-files', hostEndpoint, stackName],
+    queryKey: ['stack-files', hostEndpoint, stackName, options?.read ?? false],
     queryFn: async (): Promise<StackFilesResponse> => {
-      return api.getStackFiles(stackName, hostEndpoint);
+      return api.getStackFiles(stackName, options?.read, hostEndpoint);
     },
-    enabled: Boolean(stackName),
+    enabled: isEnabled,
+  });
+}
+
+export function useReadStackFilesMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async ({
+      stackName,
+      hostEndpoint,
+    }: {
+      stackName: string;
+      hostEndpoint?: string;
+    }) => {
+      return api.getStackFiles(stackName, true, hostEndpoint);
+    },
+    onSuccess: (data, variables) => {
+      queryClient.setQueryData(
+        ['stack-files', variables.hostEndpoint || '', variables.stackName, true],
+        data
+      );
+    },
   });
 }
 
@@ -149,6 +176,7 @@ export function useCreateStackMutation() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
       queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
+      queryClient.invalidateQueries({ queryKey: ['stack-files'] });
     },
   });
 }
@@ -163,7 +191,7 @@ export function useUpdateStackMutation() {
       hostEndpoint,
     }: {
       name: string;
-      data: Partial<CreateStackRequest>;
+      data: CreateStackRequest;
       hostEndpoint?: string;
     }) => {
       return api.updateStack(name, data, hostEndpoint);

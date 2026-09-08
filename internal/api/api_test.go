@@ -23,8 +23,10 @@ import (
 	"github.com/chickenzord/dokidoki/internal/stack"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	errdefs "github.com/docker/docker/errdefs"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 type mockDocker struct {
@@ -33,6 +35,10 @@ type mockDocker struct {
 	inspectContainerFn func(ctx context.Context, id string) (types.ContainerJSON, error)
 	serverVersionFn    func(ctx context.Context) (types.Version, error)
 	infoFn             func(ctx context.Context) (system.Info, error)
+	createContainerFn  func(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error)
+	waitContainerFn    func(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	containerLogsFn    func(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
+	removeContainerFn  func(ctx context.Context, id string, options container.RemoveOptions) error
 }
 
 func (m *mockDocker) Ping(ctx context.Context) (types.Ping, error) {
@@ -79,6 +85,37 @@ func (m *mockDocker) StartContainer(ctx context.Context, id string) error {
 }
 
 func (m *mockDocker) StopContainer(ctx context.Context, id string, timeout *int) error {
+	return nil
+}
+
+func (m *mockDocker) CreateContainer(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error) {
+	if m.createContainerFn != nil {
+		return m.createContainerFn(ctx, config, hostConfig, networkingConfig, platform, containerName)
+	}
+	return container.CreateResponse{}, nil
+}
+
+func (m *mockDocker) WaitContainer(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+	if m.waitContainerFn != nil {
+		return m.waitContainerFn(ctx, id, condition)
+	}
+	resCh := make(chan container.WaitResponse, 1)
+	errCh := make(chan error, 1)
+	resCh <- container.WaitResponse{StatusCode: 0}
+	return resCh, errCh
+}
+
+func (m *mockDocker) ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+	if m.containerLogsFn != nil {
+		return m.containerLogsFn(ctx, id, options)
+	}
+	return io.NopCloser(strings.NewReader("")), nil
+}
+
+func (m *mockDocker) RemoveContainer(ctx context.Context, id string, options container.RemoveOptions) error {
+	if m.removeContainerFn != nil {
+		return m.removeContainerFn(ctx, id, options)
+	}
 	return nil
 }
 
@@ -1024,7 +1061,7 @@ func TestCreateStack(t *testing.T) {
 	handler, tempDir := setupTestServer(t, m)
 
 	// 1. Success with content
-	payload := `{"name": "new-api-stack", "content": "services:\n  app:\n    image: node:18\n"}`
+	payload := `{"name": "new-api-stack", "files": [{"name": "compose.yaml", "content": "services:\n  app:\n    image: node:18\n"}]}`
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/stacks", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1068,6 +1105,15 @@ func TestCreateStack(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400 for invalid body, got %d", w.Code)
 	}
+
+	// 4. Empty files -> 400
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/stacks", strings.NewReader(`{"name": "no-files", "files": []}`))
+	req.Header.Set("Content-Type", "application/json")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for empty files, got %d", w.Code)
+	}
 }
 
 func TestUpdateStack(t *testing.T) {
@@ -1079,7 +1125,7 @@ func TestUpdateStack(t *testing.T) {
 	handler, tempDir := setupTestServer(t, m)
 
 	// Update existing web-stack
-	payload := `{"content": "services:\n  web:\n    image: nginx:1.25-alpine\n"}`
+	payload := `{"files": [{"name": "compose.yaml", "content": "services:\n  web:\n    image: nginx:1.25-alpine\n"}]}`
 	req := httptest.NewRequest(http.MethodPut, "/api/v1/stacks/web-stack", strings.NewReader(payload))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
@@ -1132,7 +1178,22 @@ func TestGetStackFiles(t *testing.T) {
 		t.Fatalf("unexpected files response: %+v", resp)
 	}
 
-	// 2. Not found
+	// 2. External stack without read query parameter -> empty files
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/external-stack/files", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for external stack files, got %d", w.Code)
+	}
+	var extResp stack.StackFilesResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &extResp); err != nil {
+		t.Fatalf("failed to unmarshal: %v", err)
+	}
+	if len(extResp.Files) != 0 {
+		t.Fatalf("expected 0 files without read=true on external stack, got %d", len(extResp.Files))
+	}
+
+	// 3. Not found
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks/unknown-stack/files", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)

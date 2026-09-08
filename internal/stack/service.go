@@ -3,6 +3,7 @@ package stack
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -10,12 +11,15 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 	"unicode/utf8"
 
 	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/docker/docker/api/types"
+	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
+	"github.com/docker/docker/pkg/stdcopy"
 	"gopkg.in/yaml.v3"
 )
 
@@ -320,9 +324,41 @@ func isValidStackName(name string) bool {
 	return true
 }
 
+// parseDockerLogsStdout extracts stdout bytes from Docker log stream, demultiplexing stdcopy headers if present.
+func parseDockerLogsStdout(raw []byte) []byte {
+	var stdoutBuf bytes.Buffer
+	if _, err := stdcopy.StdCopy(&stdoutBuf, io.Discard, bytes.NewReader(raw)); err == nil && stdoutBuf.Len() > 0 {
+		return stdoutBuf.Bytes()
+	}
+	return bytes.TrimSpace(raw)
+}
+
+func (s *Service) getContainerLogsString(ctx context.Context, id string) (string, error) {
+	rc, err := s.dockerCli.ContainerLogs(ctx, id, container.LogsOptions{
+		ShowStdout: true,
+		ShowStderr: true,
+	})
+	if err != nil {
+		return "", err
+	}
+	defer rc.Close()
+
+	raw, err := io.ReadAll(rc)
+	if err != nil {
+		return "", err
+	}
+	var outBuf, errBuf bytes.Buffer
+	if _, copyErr := stdcopy.StdCopy(&outBuf, &errBuf, bytes.NewReader(raw)); copyErr == nil {
+		combined := strings.TrimSpace(outBuf.String() + "\n" + errBuf.String())
+		return combined, nil
+	}
+	return strings.TrimSpace(string(raw)), nil
+}
+
 // GetStackFiles returns all readable configuration and env files for a stack directory.
-// For external stacks whose compose file is outside the volume mount, a stubbed compose.yaml is returned.
-func (s *Service) GetStackFiles(ctx context.Context, name string) (*StackFilesResponse, error) {
+// For external stacks, resolves the host directory. If forceRead is false, returns empty files slice.
+// If forceRead is true, reads directly on bare-metal or uses a one-off helper container when containerized.
+func (s *Service) GetStackFiles(ctx context.Context, name string, forceRead bool) (*StackFilesResponse, error) {
 	categorized, _, err := s.getCategorized(ctx)
 	if err != nil {
 		return nil, err
@@ -334,62 +370,148 @@ func (s *Service) GetStackFiles(ctx context.Context, name string) (*StackFilesRe
 	}
 
 	if detail.Source == string(SourceExternal) {
-		detectedPath := detail.ComposePath
-		if detectedPath == "" {
+		hostDir := ""
+		for _, c := range detail.Containers {
+			if wd, ok := c.Labels["com.docker.compose.project.working_dir"]; ok && wd != "" {
+				hostDir = wd
+				break
+			}
+		}
+		if hostDir == "" {
 			for _, c := range detail.Containers {
-				if p, ok := c.Labels["com.docker.compose.project.config_files"]; ok && p != "" {
-					detectedPath = strings.Split(p, ",")[0]
+				if cf, ok := c.Labels["com.docker.compose.project.config_files"]; ok && cf != "" {
+					first := strings.Split(cf, ",")[0]
+					hostDir = filepath.Dir(first)
 					break
 				}
 			}
 		}
+		if hostDir == "" && detail.ComposePath != "" {
+			hostDir = filepath.Dir(detail.ComposePath)
+		}
+		if hostDir != "" {
+			hostDir = filepath.Clean(hostDir)
+		}
 
-		if detectedPath != "" {
-			fi, statErr := os.Stat(detectedPath)
-			if statErr == nil && !fi.IsDir() {
-				data, readErr := os.ReadFile(detectedPath)
-				if readErr == nil {
-					var content string
-					if fi.Size() < 256*1024 && utf8.Valid(data) {
-						content = string(data)
-					}
-					return &StackFilesResponse{
-						Stack: name,
-						Dir:   filepath.Dir(detectedPath),
-						Files: []StackFile{
-							{
-								Name:      filepath.Base(detectedPath),
-								Path:      detectedPath,
-								Size:      fi.Size(),
-								Content:   content,
-								IsCompose: true,
-								IsEnv:     false,
-							},
-						},
-					}, nil
-				}
+		if !forceRead {
+			return &StackFilesResponse{
+				Stack: name,
+				Dir:   hostDir,
+				Files: []StackFile{},
+			}, nil
+		}
+
+		if hostDir == "" {
+			return nil, errors.New("unable to resolve external stack directory")
+		}
+
+		if s.selfContainerID == "" {
+			files, err := ReadDirectoryFiles(hostDir)
+			if err != nil {
+				return nil, fmt.Errorf("failed to read host directory: %w", err)
+			}
+			return &StackFilesResponse{
+				Stack: name,
+				Dir:   hostDir,
+				Files: files,
+			}, nil
+		}
+
+		// Dokidoki running in container: one-off container execution
+		if s.dockerCli == nil {
+			return nil, errors.New("docker client unavailable")
+		}
+
+		selfInspect, err := s.dockerCli.InspectContainer(ctx, s.selfContainerID)
+		if err != nil {
+			return nil, fmt.Errorf("failed to inspect self container: %w", err)
+		}
+
+		image := ""
+		if selfInspect.Config != nil && selfInspect.Config.Image != "" {
+			image = selfInspect.Config.Image
+		} else if selfInspect.Image != "" {
+			image = selfInspect.Image
+		}
+		if image == "" {
+			return nil, errors.New("unable to determine Dokidoki container image")
+		}
+
+		entrypoint := []string{"dokidoki"}
+		if selfInspect.Config != nil && len(selfInspect.Config.Entrypoint) > 0 {
+			entrypoint = selfInspect.Config.Entrypoint
+		}
+		cmd := []string{"read-files", "/mnt/target"}
+
+		createResp, err := s.dockerCli.CreateContainer(ctx, &container.Config{
+			Image:      image,
+			Entrypoint: entrypoint,
+			Cmd:        cmd,
+		}, &container.HostConfig{
+			Binds: []string{fmt.Sprintf("%s:%s:ro", hostDir, "/mnt/target")},
+		}, nil, nil, "")
+		if err != nil {
+			return nil, fmt.Errorf("failed to create helper container: %w", err)
+		}
+
+		defer func() {
+			cleanupCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			_ = s.dockerCli.RemoveContainer(cleanupCtx, createResp.ID, container.RemoveOptions{Force: true})
+		}()
+
+		if err := s.dockerCli.StartContainer(ctx, createResp.ID); err != nil {
+			return nil, fmt.Errorf("failed to start helper container: %w", err)
+		}
+
+		statusCh, errCh := s.dockerCli.WaitContainer(ctx, createResp.ID, container.WaitConditionNotRunning)
+		var statusCode int64
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case waitErr := <-errCh:
+			if waitErr != nil {
+				logs, _ := s.getContainerLogsString(context.Background(), createResp.ID)
+				return nil, fmt.Errorf("error waiting for helper container: %w; logs: %s", waitErr, logs)
+			}
+		case status := <-statusCh:
+			statusCode = status.StatusCode
+			if status.Error != nil && status.Error.Message != "" {
+				logs, _ := s.getContainerLogsString(context.Background(), createResp.ID)
+				return nil, fmt.Errorf("helper container error (%d): %s; logs: %s", status.StatusCode, status.Error.Message, logs)
 			}
 		}
 
-		// File is outside dokidoki volume mount or not readable: stub compose.yaml
-		stubContent := fmt.Sprintf("# External stack detected: %s\n# Host compose path: %s\n# Note: Path is outside Dokidoki volume mount.\n# Provide compose content to import and manage this stack in Dokidoki.\n", name, detectedPath)
-		dir := ""
-		if detectedPath != "" {
-			dir = filepath.Dir(detectedPath)
+		if statusCode != 0 {
+			logs, _ := s.getContainerLogsString(context.Background(), createResp.ID)
+			return nil, fmt.Errorf("helper container exited with status %d: %s", statusCode, logs)
 		}
+
+		logsRc, err := s.dockerCli.ContainerLogs(ctx, createResp.ID, container.LogsOptions{ShowStdout: true})
+		if err != nil {
+			return nil, fmt.Errorf("failed to get helper container logs: %w", err)
+		}
+		defer logsRc.Close()
+
+		rawLogs, err := io.ReadAll(logsRc)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read helper container logs: %w", err)
+		}
+
+		stdoutBytes := parseDockerLogsStdout(rawLogs)
+		var files []StackFile
+		if err := json.Unmarshal(stdoutBytes, &files); err != nil {
+			return nil, fmt.Errorf("failed to parse files JSON from helper container: %w; raw output: %s", err, string(stdoutBytes))
+		}
+
+		for i := range files {
+			files[i].Path = filepath.Join(hostDir, files[i].Name)
+		}
+
 		return &StackFilesResponse{
 			Stack: name,
-			Dir:   dir,
-			Files: []StackFile{
-				{
-					Name:      "compose.yaml",
-					Path:      detectedPath,
-					Size:      int64(len(stubContent)),
-					Content:   stubContent,
-					IsCompose: true,
-					IsEnv:     false,
-				},
-			},
+			Dir:   hostDir,
+			Files: files,
 		}, nil
 	}
 
@@ -400,61 +522,17 @@ func (s *Service) GetStackFiles(ctx context.Context, name string) (*StackFilesRe
 	}
 
 	stackDir := filepath.Join(stacksDir, name)
-	entries, err := os.ReadDir(stackDir)
-	if err != nil {
+	if _, err := os.Stat(stackDir); err != nil {
 		if os.IsNotExist(err) {
 			return nil, ErrNotFound
 		}
+		return nil, fmt.Errorf("failed to access stack directory: %w", err)
+	}
+
+	files, err := ReadDirectoryFiles(stackDir)
+	if err != nil {
 		return nil, fmt.Errorf("failed to read stack directory: %w", err)
 	}
-
-	files := make([]StackFile, 0)
-	for _, entry := range entries {
-		if entry.IsDir() {
-			continue
-		}
-		entryName := entry.Name()
-		// Exclude dotfiles except .env*
-		if strings.HasPrefix(entryName, ".") && !strings.HasPrefix(entryName, ".env") {
-			continue
-		}
-
-		fullPath := filepath.Join(stackDir, entryName)
-		fi, err := entry.Info()
-		if err != nil {
-			continue
-		}
-
-		isCompose := isComposeFilename(entryName)
-		isEnv := isEnvFilename(entryName)
-
-		var content string
-		if fi.Size() < 256*1024 {
-			data, err := os.ReadFile(fullPath)
-			if err == nil && utf8.Valid(data) {
-				content = string(data)
-			}
-		}
-
-		files = append(files, StackFile{
-			Name:      entryName,
-			Path:      fullPath,
-			Size:      fi.Size(),
-			Content:   content,
-			IsCompose: isCompose,
-			IsEnv:     isEnv,
-		})
-	}
-
-	sort.Slice(files, func(i, j int) bool {
-		if files[i].IsCompose != files[j].IsCompose {
-			return files[i].IsCompose
-		}
-		if files[i].IsEnv != files[j].IsEnv {
-			return files[i].IsEnv
-		}
-		return files[i].Name < files[j].Name
-	})
 
 	return &StackFilesResponse{
 		Stack: name,
@@ -587,53 +665,54 @@ func (s *Service) CreateOrImportStack(ctx context.Context, req CreateStackReques
 		return nil, errors.New("invalid stack name: must contain only alphanumeric characters, hyphens, and underscores")
 	}
 
+	if len(req.Files) == 0 {
+		return nil, errors.New("at least one file is required")
+	}
+
 	stacksDir := s.stacksDir()
 	if stacksDir == "" {
 		return nil, errors.New("stacks directory is not configured")
 	}
 
+	for _, f := range req.Files {
+		cleanName := strings.TrimSpace(f.Name)
+		if cleanName == "" || cleanName == "." || strings.Contains(cleanName, "..") || strings.Contains(cleanName, "/") || strings.Contains(cleanName, "\\") {
+			return nil, errors.New("invalid file name: path traversal detected")
+		}
+	}
+
 	stackDir := filepath.Join(stacksDir, name)
-	content := strings.TrimSpace(req.Content)
-
-	if content == "" && req.ComposePath != "" {
-		if data, err := os.ReadFile(req.ComposePath); err == nil && len(data) > 0 {
-			content = string(data)
-		}
-	}
-
-	if content == "" {
-		categorized, _, _ := s.getCategorized(ctx)
-		if categorized != nil {
-			if detail, ok := categorized.GetStack(name); ok {
-				if detail.ComposePath != "" {
-					if data, err := os.ReadFile(detail.ComposePath); err == nil && len(data) > 0 {
-						content = string(data)
-					}
-				}
-				if content == "" {
-					for _, c := range detail.Containers {
-						if comp, err := s.GetContainerCompose(ctx, c.ID); err == nil && comp.Content != "" {
-							content = comp.Content
-							break
-						}
-					}
-				}
-			}
-		}
-	}
-
-	if content == "" {
-		// Starter compose template
-		content = fmt.Sprintf("services:\n  %s:\n    image: nginx:alpine\n    restart: unless-stopped\n", name)
-	}
-
 	if err := os.MkdirAll(stackDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create stack directory: %w", err)
 	}
 
-	composePath := filepath.Join(stackDir, "compose.yaml")
-	if err := os.WriteFile(composePath, []byte(content), 0644); err != nil {
-		return nil, fmt.Errorf("failed to write compose file: %w", err)
+	hasCompose := false
+	for _, f := range req.Files {
+		cleanName := strings.TrimSpace(f.Name)
+		if isComposeFilename(cleanName) {
+			hasCompose = true
+		}
+		filePath := filepath.Join(stackDir, cleanName)
+		if err := os.WriteFile(filePath, []byte(f.Content), 0644); err != nil {
+			return nil, fmt.Errorf("failed to write file %s: %w", cleanName, err)
+		}
+	}
+
+	if !hasCompose {
+		// Check if a compose file already exists in stackDir
+		existingCompose := false
+		for _, candidate := range ComposeFileCandidates {
+			if _, err := os.Stat(filepath.Join(stackDir, candidate)); err == nil {
+				existingCompose = true
+				break
+			}
+		}
+		if !existingCompose {
+			starterContent := fmt.Sprintf("services:\n  %s:\n    image: nginx:alpine\n    restart: unless-stopped\n", name)
+			if err := os.WriteFile(filepath.Join(stackDir, "compose.yaml"), []byte(starterContent), 0644); err != nil {
+				return nil, fmt.Errorf("failed to write default compose file: %w", err)
+			}
+		}
 	}
 
 	detail, err := s.GetStack(ctx, name)
@@ -642,12 +721,13 @@ func (s *Service) CreateOrImportStack(ctx context.Context, req CreateStackReques
 	}
 
 	return &Summary{
-		Name:           name,
-		Source:         string(SourceManaged),
-		ComposePresent: true,
-		ComposePath:    composePath,
-		Rollup:         Rollup{},
-		Services:       []string{},
+		Name:            name,
+		Source:          string(SourceManaged),
+		ComposePresent:  true,
+		ComposePath:     filepath.Join(stackDir, "compose.yaml"),
+		Rollup:          Rollup{},
+		Services:        []string{},
+		TakeoverPending: false,
 	}, nil
 }
 

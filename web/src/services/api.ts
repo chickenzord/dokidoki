@@ -150,7 +150,7 @@ class ApiService {
     }, customEndpoint);
   }
 
-  public async updateStack(name: string, data: Partial<CreateStackRequest>, customEndpoint?: string): Promise<StackSummary> {
+  public async updateStack(name: string, data: CreateStackRequest, customEndpoint?: string): Promise<StackSummary> {
     return this.request<StackSummary>(`/api/v1/stacks/${encodeURIComponent(name)}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
@@ -158,8 +158,9 @@ class ApiService {
     }, customEndpoint);
   }
 
-  public async getStackFiles(name: string, customEndpoint?: string): Promise<StackFilesResponse> {
-    return this.request<StackFilesResponse>(`/api/v1/stacks/${encodeURIComponent(name)}/files`, { method: 'GET' }, customEndpoint);
+  public async getStackFiles(name: string, read?: boolean, customEndpoint?: string): Promise<StackFilesResponse> {
+    const query = read ? '?read=true' : '';
+    return this.request<StackFilesResponse>(`/api/v1/stacks/${encodeURIComponent(name)}/files${query}`, { method: 'GET' }, customEndpoint);
   }
 
   public async getStackFile(name: string, filename: string, customEndpoint?: string): Promise<StackFile> {

@@ -124,7 +124,7 @@ func (s *Server) handleCreateStack(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := s.stackSvc.CreateOrImportStack(r.Context(), req)
 	if err != nil {
-		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "traversal") {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -157,7 +157,7 @@ func (s *Server) handleUpdateStack(w http.ResponseWriter, r *http.Request) {
 
 	summary, err := s.stackSvc.CreateOrImportStack(r.Context(), req)
 	if err != nil {
-		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") {
+		if strings.Contains(err.Error(), "required") || strings.Contains(err.Error(), "invalid") || strings.Contains(err.Error(), "traversal") {
 			writeError(w, http.StatusBadRequest, err.Error())
 			return
 		}
@@ -176,7 +176,8 @@ func (s *Server) handleGetStackFiles(w http.ResponseWriter, r *http.Request) {
 	}
 
 	name := chi.URLParam(r, "name")
-	resp, err := s.stackSvc.GetStackFiles(r.Context(), name)
+	forceRead := r.URL.Query().Get("read") == "true" || r.URL.Query().Get("read") == "1"
+	resp, err := s.stackSvc.GetStackFiles(r.Context(), name, forceRead)
 	if err != nil {
 		if errors.Is(err, stack.ErrNotFound) {
 			writeError(w, http.StatusNotFound, "stack not found")

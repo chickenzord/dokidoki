@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
-import { ClusterStack } from '../types';
-import { useCreateStackMutation, useStackFilesQuery } from '../hooks/useClusterData';
+import { useQueryClient } from '@tanstack/react-query';
+import { ClusterStack, StackFile, CreateStackFile, CreateStackRequest } from '../types';
+import { useCreateStackMutation } from '../hooks/useClusterData';
 import {
   Dialog,
   DialogContent,
@@ -12,46 +13,53 @@ import {
 import { Button } from './ui/button';
 import { Input } from './ui/input';
 import { Badge } from './ui/badge';
-import { Server, FileCode, AlertCircle, CheckCircle2, Loader2 } from 'lucide-react';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from './ui/tabs';
+import { Server, FileCode, AlertCircle, CheckCircle2, Loader2, Files } from 'lucide-react';
 
 interface ImportStackDialogProps {
   isOpen: boolean;
   onClose: () => void;
   stack: ClusterStack | null;
+  loadedFiles?: StackFile[];
+}
+
+function formatBytes(bytes?: number): string {
+  if (bytes === undefined || bytes === null || bytes === 0) return '0 B';
+  if (bytes < 1024) return `${bytes} B`;
+  return `${(bytes / 1024).toFixed(1)} KB`;
 }
 
 export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
   isOpen,
   onClose,
   stack,
+  loadedFiles,
 }) => {
+  const queryClient = useQueryClient();
   const [stackName, setStackName] = useState('');
-  const [composeContent, setComposeContent] = useState('');
+  const [files, setFiles] = useState<CreateStackFile[]>([]);
+  const [activeFileName, setActiveFileName] = useState<string>('');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
-
-  const hostEndpoint = stack?.hostEndpoint || '';
-  const currentStackName = stack?.name || '';
-
-  const { data: filesData, isLoading: isLoadingFiles } = useStackFilesQuery(
-    hostEndpoint,
-    currentStackName
-  );
 
   const createStackMutation = useCreateStackMutation();
 
   useEffect(() => {
-    if (stack) {
+    if (stack && isOpen) {
       setStackName(stack.name);
       setError(null);
       setSuccess(false);
 
-      // Find compose file in fetched files if available
-      const composeFile = filesData?.files.find((f) => f.isCompose);
-      if (composeFile?.content) {
-        setComposeContent(composeFile.content);
+      if (loadedFiles && loadedFiles.length > 0) {
+        const initialFiles: CreateStackFile[] = loadedFiles.map((f) => ({
+          name: f.name,
+          content: f.content || '',
+        }));
+        setFiles(initialFiles);
+        const composeFile = loadedFiles.find((f) => f.isCompose);
+        setActiveFileName(composeFile?.name || loadedFiles[0]?.name || '');
       } else {
-        setComposeContent(
+        const defaultContent =
           `# External Compose Stack: ${stack.name}\n` +
           `# Host: ${stack.hostName}\n` +
           (stack.composePath ? `# Compose Path on host: ${stack.composePath}\n` : '') +
@@ -59,27 +67,47 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
           `services:\n` +
           stack.services
             .map((svc) => `  ${svc}:\n    # Configuration for ${svc}\n`)
-            .join('')
-        );
+            .join('');
+        setFiles([{ name: 'compose.yaml', content: defaultContent }]);
+        setActiveFileName('compose.yaml');
       }
     }
-  }, [stack, filesData]);
+  }, [stack, loadedFiles, isOpen]);
+
+  const handleContentChange = (name: string, newContent: string) => {
+    setFiles((prev) =>
+      prev.map((f) => (f.name === name ? { ...f, content: newContent } : f))
+    );
+  };
 
   const handleImport = async () => {
     if (!stack) return;
+    const trimmedName = stackName.trim();
+    if (!trimmedName) {
+      setError('Stack name is required');
+      return;
+    }
     setError(null);
+
+    const requestData: CreateStackRequest = {
+      name: trimmedName,
+      files: files.map((f) => ({
+        name: f.name,
+        content: f.content,
+      })),
+    };
 
     try {
       await createStackMutation.mutateAsync({
-        data: {
-          name: stackName.trim(),
-          content: composeContent,
-          composePath: stack.composePath,
-        },
+        data: requestData,
         hostEndpoint: stack.hostEndpoint,
       });
 
       setSuccess(true);
+      queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
+      queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
+      queryClient.invalidateQueries({ queryKey: ['stack-files'] });
+
       setTimeout(() => {
         onClose();
         setSuccess(false);
@@ -93,7 +121,7 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
 
   return (
     <Dialog open={isOpen} onOpenChange={(open) => !open && onClose()}>
-      <DialogContent className="max-w-2xl bg-slate-900 border-slate-800 text-slate-100 sm:rounded-xl">
+      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto bg-slate-900 border-slate-800 text-slate-100 sm:rounded-xl">
         <DialogHeader>
           <div className="flex items-center gap-2">
             <DialogTitle className="text-lg font-bold">Import External Stack</DialogTitle>
@@ -103,7 +131,7 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
             </Badge>
           </div>
           <DialogDescription className="text-xs text-slate-400">
-            Import this external compose stack into Dokidoki management on host <strong className="text-slate-300">{stack.hostName}</strong>. Dokidoki will save the compose configuration to the stack directory.
+            Import this external compose stack into Dokidoki management on host <strong className="text-slate-300">{stack.hostName}</strong>. Dokidoki will save the configuration files to its managed stack directory.
           </DialogDescription>
         </DialogHeader>
 
@@ -132,30 +160,81 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
             />
           </div>
 
-          <div className="space-y-1.5">
+          {/* Files Summary Header */}
+          <div className="space-y-2">
             <div className="flex items-center justify-between">
               <label className="text-xs font-medium text-slate-300 flex items-center gap-1.5">
-                <FileCode className="w-3.5 h-3.5 text-slate-400" />
-                Compose Specification (compose.yaml)
+                <Files className="w-3.5 h-3.5 text-slate-400" />
+                Files to Import ({files.length})
               </label>
-              {isLoadingFiles && (
-                <span className="text-[11px] text-slate-500 flex items-center gap-1">
-                  <Loader2 className="w-3 h-3 animate-spin" /> Loading files...
-                </span>
-              )}
             </div>
-            <textarea
-              rows={12}
-              value={composeContent}
-              onChange={(e) => setComposeContent(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-md p-3 text-slate-200 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-rose-500/50 resize-y"
-              placeholder="services:&#10;  app:&#10;    image: nginx"
-              spellCheck={false}
-            />
+
+            {/* Files preview badges */}
+            <div className="flex flex-wrap gap-1.5 p-2.5 rounded-lg bg-slate-950/60 border border-slate-800">
+              {files.map((file) => {
+                const meta = loadedFiles?.find((f) => f.name === file.name);
+                const isSelected = activeFileName === file.name;
+                return (
+                  <button
+                    key={file.name}
+                    type="button"
+                    onClick={() => setActiveFileName(file.name)}
+                    className={`flex items-center gap-1.5 px-2.5 py-1 rounded-md text-xs font-mono transition-colors ${
+                      isSelected
+                        ? 'bg-slate-800 text-white ring-1 ring-rose-500/50'
+                        : 'bg-slate-900/80 text-slate-400 hover:text-slate-200 hover:bg-slate-800/60'
+                    }`}
+                  >
+                    <FileCode className="w-3 h-3 text-slate-400" />
+                    <span>{file.name}</span>
+                    <span className="text-[10px] text-slate-500">
+                      ({formatBytes(meta?.size ?? file.content.length)})
+                    </span>
+                    {meta?.isCompose && (
+                      <span className="w-1.5 h-1.5 rounded-full bg-rose-400" />
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* Files Tabs Editor/Viewer */}
+            {files.length > 0 && (
+              <Tabs
+                value={activeFileName}
+                onValueChange={setActiveFileName}
+                className="w-full mt-2"
+              >
+                <TabsList className="bg-slate-950/80 border border-slate-800/80 p-0.5 h-auto flex flex-wrap gap-1">
+                  {files.map((file) => (
+                    <TabsTrigger
+                      key={file.name}
+                      value={file.name}
+                      className="text-xs font-mono px-3 py-1.5 data-[state=active]:bg-slate-800 data-[state=active]:text-white text-slate-400"
+                    >
+                      {file.name}
+                    </TabsTrigger>
+                  ))}
+                </TabsList>
+
+                {files.map((file) => (
+                  <TabsContent key={file.name} value={file.name} className="mt-2 outline-none">
+                    <textarea
+                      rows={10}
+                      value={file.content}
+                      onChange={(e) => handleContentChange(file.name, e.target.value)}
+                      className="w-full bg-slate-950 border border-slate-800 rounded-md p-3 text-slate-200 font-mono text-xs leading-relaxed focus:outline-none focus:ring-1 focus:ring-rose-500/50 resize-y"
+                      placeholder={`Content for ${file.name}`}
+                      spellCheck={false}
+                    />
+                  </TabsContent>
+                ))}
+              </Tabs>
+            )}
           </div>
         </div>
 
-        <DialogFooter className="gap-2 sm:gap-0">
+        <DialogFooter className="gap-2 sm:gap-0 pt-2">
           <Button
             type="button"
             variant="ghost"
@@ -169,7 +248,7 @@ export const ImportStackDialog: React.FC<ImportStackDialogProps> = ({
             type="button"
             size="sm"
             onClick={handleImport}
-            disabled={createStackMutation.isPending || !stackName.trim() || success}
+            disabled={createStackMutation.isPending || !stackName.trim() || files.length === 0 || success}
             className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium"
           >
             {createStackMutation.isPending ? (

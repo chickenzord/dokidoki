@@ -41,12 +41,13 @@ type Rollup struct {
 
 // Summary represents high-level stack metadata and container rollups.
 type Summary struct {
-	Name           string   `json:"name"`
-	Source         string   `json:"source"` // "managed" | "external"
-	ComposePresent bool     `json:"composePresent"`
-	ComposePath    string   `json:"composePath,omitempty"`
-	Rollup         Rollup   `json:"rollup"`
-	Services       []string `json:"services"`
+	Name            string   `json:"name"`
+	Source          string   `json:"source"` // "managed" | "external"
+	ComposePresent  bool     `json:"composePresent"`
+	ComposePath     string   `json:"composePath,omitempty"`
+	Rollup          Rollup   `json:"rollup"`
+	Services        []string `json:"services"`
+	TakeoverPending bool     `json:"takeover_pending"`
 }
 
 // Detail provides the Summary plus full container details.
@@ -94,11 +95,16 @@ type StackFilesResponse struct {
 	Files []StackFile `json:"files"`
 }
 
+// CreateStackFile represents an individual file in a create or import stack request.
+type CreateStackFile struct {
+	Name    string `json:"name"`
+	Content string `json:"content"`
+}
+
 // CreateStackRequest specifies the parameters to create or import a stack.
 type CreateStackRequest struct {
-	Name        string `json:"name"`
-	Content     string `json:"content,omitempty"`
-	ComposePath string `json:"composePath,omitempty"`
+	Name  string            `json:"name"`
+	Files []CreateStackFile `json:"files"`
 }
 
 // ContainerComposeResponse represents the generated Docker Compose content for a container.

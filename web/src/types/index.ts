@@ -27,6 +27,7 @@ export interface StackSummary {
   rollup: ContainerRollup;
   services: string[];
   is_self?: boolean;
+  takeover_pending?: boolean;
 }
 
 export interface PortMapping {
@@ -54,6 +55,7 @@ export interface ClusterStack extends StackSummary {
   hostId: string;
   hostName: string;
   hostEndpoint: string;
+  takeover_pending?: boolean;
 }
 
 export interface ClusterContainer extends ContainerSummary {
@@ -77,10 +79,14 @@ export interface StackFilesResponse {
   files: StackFile[];
 }
 
+export interface CreateStackFile {
+  name: string;
+  content: string;
+}
+
 export interface CreateStackRequest {
   name: string;
-  content?: string;
-  composePath?: string;
+  files: CreateStackFile[];
 }
 
 export interface ContainerComposeResponse {

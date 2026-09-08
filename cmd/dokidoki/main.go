@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"flag"
 	"log/slog"
@@ -28,6 +29,24 @@ var (
 )
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "read-files" {
+		if len(os.Args) < 3 {
+			slog.Error("read-files requires a directory argument")
+			os.Exit(1)
+		}
+		targetDir := os.Args[2]
+		files, err := stack.ReadDirectoryFiles(targetDir)
+		if err != nil {
+			slog.Error("Failed to read directory files", "dir", targetDir, "error", err)
+			os.Exit(1)
+		}
+		if err := json.NewEncoder(os.Stdout).Encode(files); err != nil {
+			slog.Error("Failed to encode files to JSON", "error", err)
+			os.Exit(1)
+		}
+		os.Exit(0)
+	}
+
 	cfg, err := config.Load()
 	if err != nil {
 		if errors.Is(err, flag.ErrHelp) {

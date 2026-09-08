@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
-import { ClusterStack } from '../types';
+import { ClusterStack, StackFilesResponse } from '../types';
 import { useStackFilesQuery, useStackContainersQuery } from '../hooks/useClusterData';
 import { api } from '../services/api';
 import {
@@ -29,6 +29,7 @@ import {
   Square,
   RotateCw,
   AlertTriangle,
+  AlertCircle,
 } from 'lucide-react';
 
 interface StackDetailSheetProps {
@@ -59,11 +60,41 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
 
   const hostEndpoint = stack?.hostEndpoint || '';
   const stackName = stack?.name || '';
+  const isExternal = stack?.source === 'external';
 
-  const { data: filesData, isLoading: isLoadingFiles } = useStackFilesQuery(
+  // For managed stacks: fetch files on mount
+  const { data: managedFilesData, isLoading: isLoadingManagedFiles } = useStackFilesQuery(
     hostEndpoint,
-    stackName
+    stackName,
+    { enabled: Boolean(stackName) && !isExternal }
   );
+
+  // For external stacks: state for manually loaded files
+  const [externalFilesData, setExternalFilesData] = useState<StackFilesResponse | null>(null);
+  const [isLoadingExternalFiles, setIsLoadingExternalFiles] = useState(false);
+  const [externalFilesError, setExternalFilesError] = useState<string | null>(null);
+
+  // Reset external files state when stack changes
+  useEffect(() => {
+    setExternalFilesData(null);
+    setIsLoadingExternalFiles(false);
+    setExternalFilesError(null);
+  }, [stack?.name, stack?.hostId, stack?.source]);
+
+  const handleLoadExternalFiles = async () => {
+    if (!stack) return;
+    setIsLoadingExternalFiles(true);
+    setExternalFilesError(null);
+
+    try {
+      const resp = await api.getStackFiles(stack.name, true, hostEndpoint);
+      setExternalFilesData(resp);
+    } catch (err: any) {
+      setExternalFilesError(err.message || 'Failed to load stack files from host');
+    } finally {
+      setIsLoadingExternalFiles(false);
+    }
+  };
 
   const { data: containers = [], isLoading: isLoadingContainers } = useStackContainersQuery(
     hostEndpoint,
@@ -78,8 +109,12 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
 
   if (!stack) return null;
 
-  const files = filesData?.files || [];
+  const activeFilesData = isExternal ? externalFilesData : managedFilesData;
+  const files = activeFilesData?.files || [];
+  const filesDir = activeFilesData?.dir;
   const defaultFile = files.find((f) => f.isCompose)?.name || files[0]?.name || '';
+  const isExternalFilesLoaded = isExternal && externalFilesData !== null;
+  const isLoadingFiles = isExternal ? isLoadingExternalFiles : isLoadingManagedFiles;
 
   const invalidateStackData = () => {
     queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
@@ -225,22 +260,34 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
 
               <div className="flex items-center gap-2">
                 {stack.source === 'external' ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setImportDialogOpen(true)}
-                    className="h-7 text-xs bg-rose-600/10 hover:bg-rose-600 text-rose-400 hover:text-white border-rose-500/30 transition-colors"
-                  >
-                    <Download className="w-3.5 h-3.5 mr-1.5" />
-                    Import Stack
-                  </Button>
-                ) : (
-                  <Badge variant="outline" className="text-xs bg-emerald-950/40 text-emerald-400 border-emerald-800/60 font-mono">
-                    Managed
+                  <Badge variant="outline" className="text-xs bg-slate-800/80 text-slate-300 border-slate-700 font-mono">
+                    External
                   </Badge>
+                ) : (
+                  <>
+                    <Badge variant="outline" className="text-xs bg-emerald-950/40 text-emerald-400 border-emerald-800/60 font-mono">
+                      Managed
+                    </Badge>
+                    {stack.takeover_pending && (
+                      <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px]">
+                        Takeover Pending
+                      </Badge>
+                    )}
+                  </>
                 )}
               </div>
             </div>
+
+            {/* Takeover Pending Alert Banner */}
+            {stack.takeover_pending && (
+              <div className="mt-3 p-3.5 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs flex items-start gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
+                <div className="leading-relaxed">
+                  <span className="font-semibold text-amber-200">Takeover Pending: </span>
+                  This stack was imported into Dokidoki, but its containers are still running against the external directory. Click &apos;Up&apos; to redeploy containers under Dokidoki management.
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
               <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1">
@@ -418,17 +465,71 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
               <div className="flex items-center justify-between">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                   <FileCode className="w-3.5 h-3.5 text-slate-400" />
-                  Stack Files ({files.length})
+                  Stack Files {isExternal && !isExternalFilesLoaded ? '' : `(${files.length})`}
                 </h3>
-                {filesData?.dir && (
-                  <span className="text-[11px] text-slate-500 font-mono truncate max-w-xs flex items-center gap-1">
-                    <HardDrive className="w-3 h-3 text-slate-600" />
-                    {filesData.dir}
-                  </span>
-                )}
+                <div className="flex items-center gap-2">
+                  {filesDir && (
+                    <span className="text-[11px] text-slate-500 font-mono truncate max-w-xs flex items-center gap-1">
+                      <HardDrive className="w-3 h-3 text-slate-600" />
+                      {filesDir}
+                    </span>
+                  )}
+                  {isExternal && isExternalFilesLoaded && (
+                    <Button
+                      size="sm"
+                      onClick={() => setImportDialogOpen(true)}
+                      className="h-7 text-xs bg-rose-600 hover:bg-rose-500 text-white font-medium shadow-sm transition-colors"
+                    >
+                      <Download className="w-3.5 h-3.5 mr-1.5" />
+                      Import Stack
+                    </Button>
+                  )}
+                </div>
               </div>
 
-              {isLoadingFiles ? (
+              {isExternal && !isExternalFilesLoaded ? (
+                <div className="p-6 bg-slate-950/40 border border-slate-800/80 rounded-xl flex flex-col items-center justify-center text-center space-y-3">
+                  <div className="w-10 h-10 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-400">
+                    <FileCode className="w-5 h-5 text-slate-400" />
+                  </div>
+                  <div className="space-y-1 max-w-md">
+                    <h4 className="text-sm font-semibold text-slate-200">External Stack Files</h4>
+                    <p className="text-xs text-slate-400 leading-relaxed">
+                      This stack is running externally on <span className="text-slate-300 font-medium">{stack.hostName}</span>. Dokidoki can read the compose configuration and environment files directly from the host filesystem.
+                    </p>
+                    {stack.composePath && (
+                      <p className="text-[11px] font-mono text-slate-500 truncate pt-1">
+                        Host Path: {stack.composePath}
+                      </p>
+                    )}
+                  </div>
+
+                  {externalFilesError && (
+                    <div className="w-full max-w-md p-3 bg-rose-950/40 border border-rose-800/60 rounded-lg text-rose-300 text-xs flex items-center gap-2 text-left">
+                      <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                      <span>{externalFilesError}</span>
+                    </div>
+                  )}
+
+                  <Button
+                    onClick={handleLoadExternalFiles}
+                    disabled={isLoadingExternalFiles}
+                    className="bg-rose-600 hover:bg-rose-500 text-white text-xs font-medium px-4 h-9 shadow-sm"
+                  >
+                    {isLoadingExternalFiles ? (
+                      <>
+                        <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                        Loading stack files from host...
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4 mr-2" />
+                        Load Stack Files
+                      </>
+                    )}
+                  </Button>
+                </div>
+              ) : isLoadingFiles ? (
                 <div className="p-8 bg-slate-950/40 border border-slate-800/60 rounded-lg flex items-center justify-center gap-2 text-slate-400 text-xs">
                   <Loader2 className="w-4 h-4 animate-spin text-rose-500" />
                   Loading stack files...
@@ -508,6 +609,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
         isOpen={importDialogOpen}
         onClose={() => setImportDialogOpen(false)}
         stack={stack}
+        loadedFiles={files}
       />
 
       <OperationLogModal

@@ -7,8 +7,10 @@ import (
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/image"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
 	"github.com/docker/docker/client"
+	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
 // Client is the interface wrapping Docker engine operations needed by Dokidoki.
@@ -19,6 +21,10 @@ type Client interface {
 	RestartContainer(ctx context.Context, id string, timeout *int) error
 	StartContainer(ctx context.Context, id string) error
 	StopContainer(ctx context.Context, id string, timeout *int) error
+	CreateContainer(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error)
+	WaitContainer(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
+	ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
+	RemoveContainer(ctx context.Context, id string, options container.RemoveOptions) error
 	PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error)
 	ServerVersion(ctx context.Context) (types.Version, error)
 	Info(ctx context.Context) (system.Info, error)
@@ -87,6 +93,26 @@ func (c *ClientWrapper) StartContainer(ctx context.Context, id string) error {
 // StopContainer stops a container.
 func (c *ClientWrapper) StopContainer(ctx context.Context, id string, timeout *int) error {
 	return c.cli.ContainerStop(ctx, id, container.StopOptions{Timeout: timeout})
+}
+
+// CreateContainer creates a new container.
+func (c *ClientWrapper) CreateContainer(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkingConfig *network.NetworkingConfig, platform *v1.Platform, containerName string) (container.CreateResponse, error) {
+	return c.cli.ContainerCreate(ctx, config, hostConfig, networkingConfig, platform, containerName)
+}
+
+// WaitContainer waits for a container to reach a certain condition.
+func (c *ClientWrapper) WaitContainer(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error) {
+	return c.cli.ContainerWait(ctx, id, condition)
+}
+
+// ContainerLogs returns the logs of a container.
+func (c *ClientWrapper) ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+	return c.cli.ContainerLogs(ctx, id, options)
+}
+
+// RemoveContainer removes a container from the docker host.
+func (c *ClientWrapper) RemoveContainer(ctx context.Context, id string, options container.RemoveOptions) error {
+	return c.cli.ContainerRemove(ctx, id, options)
 }
 
 // PullImage requests the docker host to pull an image from a remote registry.
