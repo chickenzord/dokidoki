@@ -822,7 +822,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                       <span className="text-slate-300 font-medium">Stack Configuration Editor</span>
                       <span className="text-slate-600">•</span>
                       <span className="text-[11px] text-slate-400">
-                        Editing is just editing; changes are saved to disk without automatically updating running containers.
+                        Changes are saved to disk only. Redeploy with &apos;Up&apos; when you&apos;re ready to apply them.
                       </span>
                     </div>
 

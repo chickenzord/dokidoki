@@ -5,7 +5,6 @@ import { json } from '@codemirror/lang-json';
 import { StreamLanguage, indentUnit } from '@codemirror/language';
 import { properties } from '@codemirror/legacy-modes/mode/properties';
 import { shell } from '@codemirror/legacy-modes/mode/shell';
-import { oneDark } from '@codemirror/theme-one-dark';
 import { EditorView } from '@codemirror/view';
 
 export interface CodeEditorProps {
@@ -107,7 +106,7 @@ const dokidokiEditorTheme = EditorView.theme({
   '&.cm-focused': {
     outline: 'none',
   },
-});
+}, { dark: true });
 
 export const CodeEditor: React.FC<CodeEditorProps> = ({
   value,
@@ -123,7 +122,6 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
 }) => {
   const extensions = useMemo(() => {
     const exts: Extension[] = [
-      oneDark,
       dokidokiEditorTheme,
       EditorView.lineWrapping,
       indentUnit.of('  '),
@@ -138,6 +136,7 @@ export const CodeEditor: React.FC<CodeEditorProps> = ({
   return (
     <div className={`overflow-hidden rounded-md border border-slate-800 bg-slate-950 text-xs font-mono ${className}`}>
       <CodeMirror
+        theme="dark"
         value={value}
         onChange={onChange}
         readOnly={readOnly}
