@@ -8,7 +8,7 @@ LDFLAGS = -s -w -X main.version=$(VERSION) -X main.commit=$(COMMIT) -X main.buil
 
 all: build
 
-build:
+build: build-ui
 	@mkdir -p $(dir $(BINARY))
 	CGO_ENABLED=0 go build -ldflags "$(LDFLAGS)" -o $(BINARY) ./cmd/dokidoki
 

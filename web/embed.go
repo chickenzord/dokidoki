@@ -4,6 +4,7 @@ import (
 	"embed"
 	"errors"
 	"io/fs"
+	"log"
 	"net/http"
 	"os"
 	"strings"
@@ -18,6 +19,13 @@ func Handler() http.Handler {
 	distSub, err := fs.Sub(distFS, "dist")
 	if err != nil {
 		panic(err)
+	}
+
+	// Warn if dist appears empty (frontend not built). `go build` succeeds
+	// even when only the .gitkeep placeholder is present; check for the
+	// SPA entry point (index.html) to detect a missed `bun run build`.
+	if _, statErr := fs.Stat(distSub, "index.html"); statErr != nil {
+		log.Println("warning: embedded web/dist has no index.html — run `make build-ui` (or `bun run build` in web/) before `go build` to bundle the frontend")
 	}
 
 	fileServer := http.FileServer(http.FS(distSub))

@@ -55,6 +55,21 @@ Once started, open the web interface at `http://<host-ip>:<port>` from any node.
 
 ---
 
+## Development
+
+Build the binary locally (requires [Go](https://go.dev/) and [Bun](https://bun.sh/)):
+
+```bash
+make build         # builds the frontend, then compiles bin/dokidoki
+make build-ui      # only rebuild the frontend (web/dist)
+make test          # run go tests
+make clean         # remove bin/ and web/dist
+```
+
+The frontend assets in `web/dist/` are git-ignored (only `.gitkeep` is tracked). `make build` runs `build-ui` first so the SPA is embedded into the Go binary via `go:embed`. Running `go build` directly without first running `bun run build` produces a binary that warns at startup with an empty web UI.
+
+---
+
 ## Multi-Host Setup
 
 * **Local Network (LAN):** Nodes discover each other automatically via mDNS.

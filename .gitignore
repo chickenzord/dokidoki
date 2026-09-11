@@ -35,9 +35,7 @@ go.work.sum
 # Web frontend
 web/node_modules/
 web/dist/*
-!web/dist/index.html
-!web/dist/assets/
-!web/dist/assets/.gitkeep
+!web/dist/.gitkeep
 web/.vite/
 *.tsbuildinfo
 
