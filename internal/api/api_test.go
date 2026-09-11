@@ -109,7 +109,7 @@ func (m *mockDocker) ContainerLogs(ctx context.Context, id string, options conta
 	if m.containerLogsFn != nil {
 		return m.containerLogsFn(ctx, id, options)
 	}
-	return io.NopCloser(strings.NewReader("")), nil
+	return io.NopCloser(strings.NewReader("stdout: hello\nstderr: world\n")), nil
 }
 
 func (m *mockDocker) RemoveContainer(ctx context.Context, id string, options container.RemoveOptions) error {

@@ -7,6 +7,7 @@ import (
 	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/stack"
+	"github.com/docker/docker/api/types/container"
 )
 
 // StackService defines the domain operations for managing stacks and containers.
@@ -29,6 +30,7 @@ type StackService interface {
 	ComposeDown(ctx context.Context, stackName string, out io.Writer) (*stack.OperationResult, error)
 	ComposeRestart(ctx context.Context, stackName string, service string, out io.Writer) (*stack.OperationResult, error)
 	ComposePull(ctx context.Context, stackName string, out io.Writer) (*stack.OperationResult, error)
+	ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
 }
 
 // ClusterService defines the cluster coordination operations required by the API.

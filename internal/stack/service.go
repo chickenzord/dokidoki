@@ -731,6 +731,21 @@ func (s *Service) CreateOrImportStack(ctx context.Context, req CreateStackReques
 	}, nil
 }
 
+// ContainerLogs returns the logs of a container.
+func (s *Service) ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error) {
+	if s.dockerCli == nil {
+		return nil, ErrContainerNotFound
+	}
+	rc, err := s.dockerCli.ContainerLogs(ctx, id, options)
+	if err != nil {
+		if client.IsErrNotFound(err) || strings.Contains(strings.ToLower(err.Error()), "no such container") {
+			return nil, ErrContainerNotFound
+		}
+		return nil, err
+	}
+	return rc, nil
+}
+
 type composeServiceConfig struct {
 	Image       string   `yaml:"image,omitempty"`
 	Command     string   `yaml:"command,omitempty"`

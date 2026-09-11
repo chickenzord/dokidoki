@@ -4,6 +4,7 @@ import { useClusterContainersQuery } from '../hooks/useClusterData';
 import { getHostForContainer } from '../lib/utils';
 import { ContainerDetailSheet } from './ContainerDetailSheet';
 import { GenerateComposeDialog } from './GenerateComposeDialog';
+import { ContainerLogsModal } from './ContainerLogsModal';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
@@ -18,6 +19,7 @@ import {
   Loader2,
   ExternalLink,
   X,
+  Terminal,
 } from 'lucide-react';
 
 export interface ClusterContainersViewProps {
@@ -34,6 +36,7 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
   const [localSearch, setLocalSearch] = useState('');
   const [selectedContainer, setSelectedContainer] = useState<ClusterContainer | null>(null);
   const [generatingForContainer, setGeneratingForContainer] = useState<ClusterContainer | null>(null);
+  const [logsForContainer, setLogsForContainer] = useState<ClusterContainer | null>(null);
   const [dismissedUnreachable, setDismissedUnreachable] = useState(false);
 
   const { data, isLoading, error } = useClusterContainersQuery(selectedHostId);
@@ -396,7 +399,19 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                       )}
                     </td>
 
-                    <td className="p-3.5 text-right">
+                    <td className="p-3.5 text-right flex items-center justify-end gap-2">
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          setLogsForContainer(container);
+                        }}
+                        className="h-6 px-2 text-[10px] text-indigo-400 hover:text-white hover:bg-indigo-600/20 border border-indigo-500/20 font-sans"
+                      >
+                        <Terminal className="w-3 h-3 mr-1" />
+                        Logs
+                      </Button>
                       {isStandalone && (
                         <Button
                           size="sm"
@@ -433,6 +448,18 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
         isOpen={Boolean(generatingForContainer)}
         onClose={() => setGeneratingForContainer(null)}
       />
+
+      {/* Container Logs Modal */}
+      {logsForContainer && (
+        <ContainerLogsModal
+          isOpen={Boolean(logsForContainer)}
+          onClose={() => setLogsForContainer(null)}
+          containerId={logsForContainer.id}
+          containerName={logsForContainer.name}
+          nodeName={logsForContainer.hostName}
+          hostEndpoint={logsForContainer.hostEndpoint}
+        />
+      )}
     </div>
   );
 };

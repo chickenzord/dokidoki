@@ -96,6 +96,7 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/containers/{id}/restart", s.handleRestartContainer)
 		r.Post("/containers/{id}/start", s.handleStartContainer)
 		r.Post("/containers/{id}/stop", s.handleStopContainer)
+		r.Get("/containers/{id}/logs", s.handleContainerLogs)
 
 		// Host routes
 		r.Get("/host", s.handleHostInfo)

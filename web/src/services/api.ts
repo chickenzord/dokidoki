@@ -65,7 +65,14 @@ class ApiService {
   private resolveUrl(path: string, customEndpoint?: string): string {
     const base = customEndpoint !== undefined ? customEndpoint : this.activeEndpoint;
     const cleanPath = path.startsWith('/') ? path : `/${path}`;
-    return base ? `${base}${cleanPath}` : cleanPath;
+    if (!base) return cleanPath;
+
+    // If base matches current browser origin, use relative path to avoid CORS / mixed-origin issues
+    if (typeof window !== 'undefined' && (base === window.location.origin || base.replace(/\/+$/, '') === window.location.origin)) {
+      return cleanPath;
+    }
+
+    return `${base}${cleanPath}`;
   }
 
   private async fetchWithTimeout(url: string, options?: RequestOptions): Promise<Response> {
@@ -322,6 +329,21 @@ class ApiService {
     dimensions?: { cols?: number; rows?: number }
   ): Promise<OperationResult> {
     return this.streamOperation(`/api/v1/stacks/${encodeURIComponent(name)}/pull`, onChunk, customEndpoint, dimensions);
+  }
+  public getContainerLogsUrl(
+    id: string,
+    params: { follow?: boolean; tail?: string; timestamps?: boolean; since?: string } = {},
+    customEndpoint?: string
+  ): string {
+    const searchParams = new URLSearchParams();
+    searchParams.set('stream', 'sse');
+    if (params.follow !== undefined) searchParams.set('follow', String(params.follow));
+    if (params.tail) searchParams.set('tail', params.tail);
+    if (params.timestamps !== undefined) searchParams.set('timestamps', String(params.timestamps));
+    if (params.since) searchParams.set('since', params.since);
+
+    const path = `/api/v1/containers/${encodeURIComponent(id)}/logs?${searchParams.toString()}`;
+    return this.resolveUrl(path, customEndpoint);
   }
 }
 

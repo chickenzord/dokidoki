@@ -4,6 +4,7 @@ import { ClusterContainer } from '../types';
 import { useContainerInspectQuery } from '../hooks/useClusterData';
 import { api } from '../services/api';
 import { getHostForContainer } from '../lib/utils';
+import { ContainerLogsModal } from './ContainerLogsModal';
 import {
   Sheet,
   SheetContent,
@@ -51,6 +52,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
 }) => {
   const queryClient = useQueryClient();
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
+  const [logsOpen, setLogsOpen] = useState(false);
   const [rawInspectOpen, setRawInspectOpen] = useState(false);
   const [copiedInspect, setCopiedInspect] = useState(false);
 
@@ -58,7 +60,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
   const [actionLoading, setActionLoading] = useState<'start' | 'stop' | 'restart' | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Streaming operation state (isolated in modal to avoid re-rendering entire sheet on log chunks)
+  // Streaming operation state
   const [activeOperation, setActiveOperation] = useState<OperationTask | null>(null);
 
   const hostEndpoint = container?.hostEndpoint || '';
@@ -180,7 +182,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
     setActiveOperation({
       title: 'Pull Image',
       subtitle: `${container.image} on ${container.hostName}`,
-      action: (chunk, dims) => api.pullContainer(container.id, chunk, hostEndpoint, dims),
+      action: (onChunk, dims) => api.pullContainer(container.id, onChunk, hostEndpoint, dims),
       onSuccess: invalidateContainerData,
     });
   };
@@ -199,6 +201,15 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               </div>
 
               <div className="flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => setLogsOpen(true)}
+                  className="h-7 text-xs bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white border-indigo-500/30 transition-colors"
+                >
+                  <Terminal className="w-3.5 h-3.5 mr-1.5" />
+                  Logs
+                </Button>
                 {isStandalone ? (
                   <Button
                     size="sm"
@@ -251,7 +262,6 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               </span>
             </div>
 
-            {/* Action Bar */}
             <div className="flex flex-wrap items-center gap-2 pt-3">
               {isRunning ? (
                 <Button
@@ -331,7 +341,6 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
           </SheetHeader>
 
           <div className="space-y-6 py-4">
-            {/* Overview Attributes */}
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="p-3 rounded-lg bg-slate-950/40 border border-slate-800/60 space-y-1">
                 <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
@@ -377,7 +386,6 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               )}
             </div>
 
-            {/* Ports Section */}
             <div className="space-y-2">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <Network className="w-3.5 h-3.5 text-slate-400" />
@@ -429,7 +437,6 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               )}
             </div>
 
-            {/* Mounts / Volumes */}
             <div className="space-y-2">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 <HardDrive className="w-3.5 h-3.5 text-slate-400" />
@@ -443,7 +450,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               ) : (
                 <div className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950/40">
                   <div className="divide-y divide-slate-800/60">
-                    {mounts.map((m, idx) => (
+                    {mounts.map((m: any, idx: number) => (
                       <div key={idx} className="p-2.5 space-y-1 text-xs">
                         <div className="flex items-center justify-between text-[11px]">
                           <span className="font-mono text-slate-400 uppercase text-[10px] bg-slate-900 px-1.5 py-0.5 rounded border border-slate-800">
@@ -466,7 +473,6 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               )}
             </div>
 
-            {/* Environment Variables */}
             <div className="space-y-2">
               <h3 className="text-xs font-semibold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                 Environment Variables ({envVars.length})
@@ -483,7 +489,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               ) : (
                 <div className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950/40 max-h-56 overflow-y-auto">
                   <div className="divide-y divide-slate-800/60 font-mono text-xs">
-                    {envVars.map((env, idx) => {
+                    {envVars.map((env: string, idx: number) => {
                       const splitIdx = env.indexOf('=');
                       const key = splitIdx !== -1 ? env.substring(0, splitIdx) : env;
                       const val = splitIdx !== -1 ? env.substring(splitIdx + 1) : '';
@@ -503,7 +509,6 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               )}
             </div>
 
-            {/* Collapsible Raw Inspect */}
             <div className="border border-slate-800 rounded-lg overflow-hidden bg-slate-950/60">
               <button
                 type="button"
@@ -565,6 +570,15 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
         isOpen={Boolean(activeOperation)}
         onClose={() => setActiveOperation(null)}
         operation={activeOperation}
+      />
+
+      <ContainerLogsModal
+        isOpen={logsOpen}
+        onClose={() => setLogsOpen(false)}
+        containerId={containerId}
+        containerName={cleanName}
+        nodeName={container.hostName}
+        hostEndpoint={hostEndpoint}
       />
     </>
   );
