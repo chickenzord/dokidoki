@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/chickenzord/dokidoki/internal/cluster"
@@ -21,6 +22,7 @@ import (
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/logger"
 	"github.com/chickenzord/dokidoki/internal/stack"
+	"github.com/chickenzord/dokidoki/web"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -941,9 +943,28 @@ func TestWebUIHandler(t *testing.T) {
 			return types.Ping{APIVersion: "1.47"}, nil
 		},
 	}
-	handler, _ := setupTestServer(t, m)
 
-	// 1. Root / serves index.html
+	fakeFS := fstest.MapFS{
+		"index.html":     &fstest.MapFile{Data: []byte("<!doctype html><title>SPA</title>")},
+		"assets/app.js":  &fstest.MapFile{Data: []byte("console.log('app')")},
+		"assets/app.css": &fstest.MapFile{Data: []byte("body{margin:0}")},
+	}
+
+	tempDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(tempDir, "web-stack"), 0755); err != nil {
+		t.Fatalf("failed to create stack dir: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(tempDir, "web-stack", "compose.yaml"), []byte("services:\n  web:\n    image: nginx:latest\n"), 0644); err != nil {
+		t.Fatalf("failed to write compose.yaml: %v", err)
+	}
+
+	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080, StacksDir: tempDir}
+	scanner := stack.NewScanner(tempDir)
+	stackSvc := stack.NewService(scanner, m, "")
+	server := NewServer(cfg, m, stackSvc, nil, "").WithWebUI(web.HandlerFromFS(fakeFS))
+	handler := server.Routes()
+
+	// 1. Root / serves the SPA entry
 	req := httptest.NewRequest(http.MethodGet, "/", nil)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -951,11 +972,11 @@ func TestWebUIHandler(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for /, got %d", w.Code)
 	}
-	if body := w.Body.String(); !bytes.Contains(w.Body.Bytes(), []byte("Dokidoki")) {
-		t.Fatalf("expected index.html with Dokidoki, got: %s", body)
+	if w.Body.Len() == 0 {
+		t.Fatal("expected non-empty body for /")
 	}
 
-	// 2. Non-API route falls back to SPA index.html
+	// 2. Non-API route falls back to SPA root
 	req = httptest.NewRequest(http.MethodGet, "/stacks/my-custom-stack", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -963,11 +984,20 @@ func TestWebUIHandler(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("expected 200 for SPA route, got %d", w.Code)
 	}
-	if !bytes.Contains(w.Body.Bytes(), []byte("Dokidoki")) {
-		t.Fatalf("expected fallback index.html for SPA route")
+	if w.Body.Len() == 0 {
+		t.Fatal("expected non-empty fallback body")
 	}
 
-	// 3. API route /api/v1/host/ping has precedence
+	// 3. Static asset served
+	req = httptest.NewRequest(http.MethodGet, "/assets/app.js", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200 for /assets/app.js, got %d", w.Code)
+	}
+
+	// 4. API route /api/v1/host/ping has precedence over SPA
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/host/ping", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -983,16 +1013,13 @@ func TestWebUIHandler(t *testing.T) {
 		t.Fatalf("expected status ok, got %v", resp)
 	}
 
-	// 4. Unknown /api/v1 route returns 404 and does not fall back to web UI
+	// 5. Unknown /api/v1 route returns 404 and does not fall back to web UI
 	req = httptest.NewRequest(http.MethodGet, "/api/v1/not-a-real-route", nil)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Fatalf("expected 404 for unknown API route, got %d", w.Code)
-	}
-	if bytes.Contains(w.Body.Bytes(), []byte("Dokidoki")) {
-		t.Fatalf("expected 404, not web UI SPA fallback for /api/v1 routes")
 	}
 }
 

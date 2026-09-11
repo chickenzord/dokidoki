@@ -25,6 +25,7 @@ type Server struct {
 	clusterSvc      ClusterService
 	stacksDir       string
 	selfContainerID string
+	webUI           http.Handler
 }
 
 // NewServer creates a new API Server instance.
@@ -43,6 +44,13 @@ func NewServer(cfg *config.Config, dockerCli docker.Client, stackSvc StackServic
 		stacksDir:       cfg.StacksDir,
 		selfContainerID: selfContainerID,
 	}
+}
+
+// WithWebUI replaces the default embedded Web UI handler. Intended for tests
+// that inject an in-memory fs.FS via web.HandlerFromFS.
+func (s *Server) WithWebUI(h http.Handler) *Server {
+	s.webUI = h
+	return s
 }
 
 // NewRouter creates and configures the chi Router for Dokidoki.
@@ -112,7 +120,11 @@ func (s *Server) Routes() http.Handler {
 	})
 
 	// Mount embedded Web UI handler for SPA routing with client-side fallback
-	r.Handle("/*", web.Handler())
+	webUI := s.webUI
+	if webUI == nil {
+		webUI = web.Handler()
+	}
+	r.Handle("/*", webUI)
 
 	return r
 }
