@@ -1629,6 +1629,304 @@ func TestStackComposeOperationHandlers(t *testing.T) {
 	})
 }
 
+// stdcopyFrame builds a single stdcopy header-framed chunk for stdout (stream
+// type 1) or stderr (stream type 2). Used to feed handleContainerLogs with
+// docker-shaped input.
+func stdcopyFrame(streamType byte, payload string) []byte {
+	size := uint32(len(payload))
+	return append(
+		[]byte{streamType, 0, 0, 0, byte(size >> 24), byte(size >> 16), byte(size >> 8), byte(size)},
+		[]byte(payload)...,
+	)
+}
+
+func TestSSEWriter(t *testing.T) {
+	t.Run("writes event + data lines and flushes", func(t *testing.T) {
+		var buf bytes.Buffer
+		sw := &sseWriter{w: &buf, event: "stdout"}
+
+		n, err := sw.Write([]byte("hello\nworld\n"))
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if n != len("hello\nworld\n") {
+			t.Errorf("expected n=%d, got %d", len("hello\nworld\n"), n)
+		}
+
+		want := "event: stdout\ndata: hello\ndata: world\n\n"
+		if buf.String() != want {
+			t.Errorf("unexpected output:\nwant: %q\ngot:  %q", want, buf.String())
+		}
+	})
+
+	t.Run("strips trailing CRLF", func(t *testing.T) {
+		var buf bytes.Buffer
+		sw := &sseWriter{w: &buf, event: "stderr"}
+		_, _ = sw.Write([]byte("line one\r\nline two\r\n"))
+		want := "event: stderr\ndata: line one\ndata: line two\n\n"
+		if buf.String() != want {
+			t.Errorf("unexpected output:\nwant: %q\ngot:  %q", want, buf.String())
+		}
+	})
+
+	t.Run("propagates write errors", func(t *testing.T) {
+		sw := &sseWriter{w: &errWriter{}, event: "stdout"}
+		_, err := sw.Write([]byte("anything"))
+		if err == nil {
+			t.Fatal("expected error from underlying writer")
+		}
+	})
+}
+
+type errWriter struct{}
+
+func (errWriter) Write(p []byte) (int, error) { return 0, errors.New("boom") }
+
+func TestContainerLogs(t *testing.T) {
+	stdcopyOut := append(stdcopyFrame(1, "hello stdout\n"), stdcopyFrame(2, "hello stderr\n")...)
+
+	t.Run("SSE_named_events", func(t *testing.T) {
+		m := &mockDocker{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(stdcopyOut)), nil
+			},
+		}
+		handler, _ := setupTestServer(t, m)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/logs?stream=sse", nil)
+		req.Header.Set("Accept", "text/event-stream")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		ct := w.Header().Get("Content-Type")
+		if !strings.Contains(ct, "text/event-stream") {
+			t.Errorf("expected text/event-stream Content-Type, got %s", ct)
+		}
+		body := w.Body.String()
+		if !strings.Contains(body, "event: stdout\ndata: hello stdout") {
+			t.Errorf("missing stdout event in body: %q", body)
+		}
+		if !strings.Contains(body, "event: stderr\ndata: hello stderr") {
+			t.Errorf("missing stderr event in body: %q", body)
+		}
+	})
+
+	t.Run("plain_text", func(t *testing.T) {
+		m := &mockDocker{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(stdcopyOut)), nil
+			},
+		}
+		handler, _ := setupTestServer(t, m)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/logs", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		ct := w.Header().Get("Content-Type")
+		if !strings.Contains(ct, "text/plain") {
+			t.Errorf("expected text/plain Content-Type, got %s", ct)
+		}
+		if !strings.Contains(w.Body.String(), "hello stdout") {
+			t.Errorf("missing stdout in plain body: %q", w.Body.String())
+		}
+	})
+
+	t.Run("SSE_by_Accept_header", func(t *testing.T) {
+		m := &mockDocker{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return io.NopCloser(bytes.NewReader(stdcopyOut)), nil
+			},
+		}
+		handler, _ := setupTestServer(t, m)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/logs", nil)
+		req.Header.Set("Accept", "text/event-stream")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if !strings.Contains(w.Header().Get("Content-Type"), "text/event-stream") {
+			t.Errorf("expected SSE Content-Type from Accept header, got %s", w.Header().Get("Content-Type"))
+		}
+	})
+
+	t.Run("defaults_follow_and_tail", func(t *testing.T) {
+		var seenOpts container.LogsOptions
+		m := &mockDocker{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				seenOpts = opts
+				return io.NopCloser(bytes.NewReader(stdcopyOut)), nil
+			},
+		}
+		handler, _ := setupTestServer(t, m)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/logs", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if !seenOpts.Follow {
+			t.Error("expected Follow default true")
+		}
+		if seenOpts.Tail != "500" {
+			t.Errorf("expected Tail default '500', got %q", seenOpts.Tail)
+		}
+		if !seenOpts.ShowStdout || !seenOpts.ShowStderr {
+			t.Error("expected ShowStdout and ShowStderr true")
+		}
+	})
+
+	t.Run("not_found", func(t *testing.T) {
+		m := &mockDocker{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return nil, errdefs.NotFound(errors.New("no such container"))
+			},
+		}
+		handler, _ := setupTestServer(t, m)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/logs", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+
+	t.Run("internal_error", func(t *testing.T) {
+		m := &mockDocker{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return nil, errors.New("docker daemon unreachable")
+			},
+		}
+		handler, _ := setupTestServer(t, m)
+
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/containers/cid-1/logs", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusInternalServerError {
+			t.Fatalf("expected 500, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
+func TestContainerStartSuccess(t *testing.T) {
+	m := &mockDocker{
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{ID: id, Name: "/test"},
+				Config:            &container.Config{Image: "nginx:alpine"},
+			}, nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/cid-1/start", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+	}
+	var res stack.OperationResult
+	if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+		t.Fatal(err)
+	}
+	if !res.Success {
+		t.Errorf("expected success true, got %+v", res)
+	}
+}
+
+func TestContainerStopAndRestartSuccess(t *testing.T) {
+	m := &mockDocker{
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{ID: id, Name: "/test"},
+				Config:            &container.Config{Image: "nginx:alpine"},
+			}, nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	t.Run("Stop_Success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/cid-1/stop", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var res stack.OperationResult
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true, got %+v", res)
+		}
+	})
+
+	t.Run("Restart_Success", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/containers/cid-1/restart", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+		}
+		var res stack.OperationResult
+		if err := json.Unmarshal(w.Body.Bytes(), &res); err != nil {
+			t.Fatal(err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true, got %+v", res)
+		}
+	})
+}
+
+func TestComposeOperationStreaming(t *testing.T) {
+	m := &mockDocker{}
+	runner := &mockComposeRunner{}
+	handler, _ := setupTestServerWithRunner(t, m, runner, "")
+
+	cases := []struct {
+		name   string
+		path   string
+		marker string
+	}{
+		{"Down", "/api/v1/stacks/web-stack/down?stream=true", "down streamed output"},
+		{"Restart", "/api/v1/stacks/web-stack/restart?stream=true", "restart streamed output"},
+		{"Pull", "/api/v1/stacks/web-stack/pull?stream=true", "pull streamed output"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			req := httptest.NewRequest(http.MethodPost, tc.path, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected 200, got %d: %s", w.Code, w.Body.String())
+			}
+			ct := w.Header().Get("Content-Type")
+			if !strings.Contains(ct, "text/plain") {
+				t.Errorf("expected text/plain, got %s", ct)
+			}
+			if !strings.Contains(w.Body.String(), tc.marker) {
+				t.Errorf("expected %q in stream, got %q", tc.marker, w.Body.String())
+			}
+		})
+	}
+}
+
 type mockClusterService struct {
 	nodes []cluster.Node
 }

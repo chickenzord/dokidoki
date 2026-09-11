@@ -1963,3 +1963,72 @@ func TestService_ComposeOperations(t *testing.T) {
 		}
 	})
 }
+
+func TestService_ContainerLogs(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("nil docker client returns ErrContainerNotFound", func(t *testing.T) {
+		svc := NewService(nil, nil, "")
+		_, err := svc.ContainerLogs(ctx, "cid-1", container.LogsOptions{})
+		if !errors.Is(err, ErrContainerNotFound) {
+			t.Errorf("expected ErrContainerNotFound, got %v", err)
+		}
+	})
+
+	t.Run("not found error maps to ErrContainerNotFound", func(t *testing.T) {
+		m := &mockDockerClient{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return nil, errdefs.NotFound(errors.New("no such container"))
+			},
+		}
+		svc := NewService(nil, m, "")
+		_, err := svc.ContainerLogs(ctx, "missing", container.LogsOptions{})
+		if !errors.Is(err, ErrContainerNotFound) {
+			t.Errorf("expected ErrContainerNotFound, got %v", err)
+		}
+	})
+
+	t.Run("'no such container' error message maps to ErrContainerNotFound", func(t *testing.T) {
+		m := &mockDockerClient{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return nil, errors.New("Error: No such container: abc123")
+			},
+		}
+		svc := NewService(nil, m, "")
+		_, err := svc.ContainerLogs(ctx, "abc123", container.LogsOptions{})
+		if !errors.Is(err, ErrContainerNotFound) {
+			t.Errorf("expected ErrContainerNotFound, got %v", err)
+		}
+	})
+
+	t.Run("other error propagated as-is", func(t *testing.T) {
+		want := errors.New("docker daemon unreachable")
+		m := &mockDockerClient{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return nil, want
+			},
+		}
+		svc := NewService(nil, m, "")
+		_, err := svc.ContainerLogs(ctx, "cid-1", container.LogsOptions{})
+		if !errors.Is(err, want) {
+			t.Errorf("expected propagated error %v, got %v", want, err)
+		}
+	})
+
+	t.Run("success returns the reader", func(t *testing.T) {
+		want := io.NopCloser(strings.NewReader("hello"))
+		m := &mockDockerClient{
+			containerLogsFn: func(ctx context.Context, id string, opts container.LogsOptions) (io.ReadCloser, error) {
+				return want, nil
+			},
+		}
+		svc := NewService(nil, m, "")
+		rc, err := svc.ContainerLogs(ctx, "cid-1", container.LogsOptions{Follow: true, Tail: "100"})
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if rc != want {
+			t.Errorf("expected returned reader to match mock")
+		}
+	})
+}

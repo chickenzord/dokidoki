@@ -1,6 +1,14 @@
 coverage:
   status:
+    # Patch checks are noisy on a small repo — flag unrelated diff hunks
+    # and add little signal vs. overall project coverage.
+    patch: off
     project:
       default:
-        target: auto
-    patch: off
+        # Exclude main entrypoint packages from overall coverage — they're
+        # wiring code with little logic and conventionally skipped.
+        paths:
+          - "!cmd/**"
+
+ignore:
+  - "cmd/**"

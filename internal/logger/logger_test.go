@@ -2,7 +2,9 @@ package logger
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
+	"os"
 	"strings"
 	"testing"
 )
@@ -209,5 +211,65 @@ func TestConfigItemsAlignment(t *testing.T) {
 		} else if idx != colonIdx {
 			t.Errorf("colon not aligned at %d: %q", colonIdx, line)
 		}
+	}
+}
+
+func TestMapToConfigItems(t *testing.T) {
+	t.Run("returns sorted items with sensitivity flag", func(t *testing.T) {
+		items := MapToConfigItems(map[string]any{
+			"port":     8080,
+			"password": "secret",
+			"name":     "dokidoki",
+		})
+
+		if len(items) != 3 {
+			t.Fatalf("expected 3 items, got %d", len(items))
+		}
+		wantKeys := []string{"name", "password", "port"}
+		for i, k := range wantKeys {
+			if items[i].Key != k {
+				t.Errorf("item %d: expected key %q, got %q", i, k, items[i].Key)
+			}
+		}
+		if !items[1].Sensitive {
+			t.Error("expected 'password' to be flagged Sensitive")
+		}
+		if items[0].Sensitive || items[2].Sensitive {
+			t.Error("expected non-sensitive keys to be flagged false")
+		}
+	})
+
+	t.Run("empty map returns empty slice", func(t *testing.T) {
+		items := MapToConfigItems(map[string]any{})
+		if len(items) != 0 {
+			t.Errorf("expected 0 items, got %d", len(items))
+		}
+	})
+}
+
+func TestPrintConfig(t *testing.T) {
+	// Redirect stdout to capture PrintConfig output.
+	origStdout := os.Stdout
+	r, w, err := os.Pipe()
+	if err != nil {
+		t.Fatalf("failed to create pipe: %v", err)
+	}
+	os.Stdout = w
+
+	PrintConfig("TestTitle", []ConfigItem{
+		{Key: "foo", Value: "bar"},
+		{Key: "baz", Value: 42},
+	})
+
+	_ = w.Close()
+	out, _ := io.ReadAll(r)
+	os.Stdout = origStdout
+
+	got := string(out)
+	if !strings.Contains(got, "TestTitle") {
+		t.Errorf("expected output to contain title, got: %q", got)
+	}
+	if !strings.Contains(got, "foo") || !strings.Contains(got, "baz") {
+		t.Errorf("expected output to contain items, got: %q", got)
 	}
 }

@@ -37,3 +37,4 @@ jobs:
           files: coverage.out
           token: ${{ secrets.CODECOV_TOKEN }}
           fail_ci_if_error: false
+          disable_codecov_patch: true
