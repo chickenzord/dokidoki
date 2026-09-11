@@ -153,6 +153,10 @@ services:
       # - DOKIDOKI_PEERS=http://192.168.1.10:8080
 ```
 
+> [!IMPORTANT]
+> **Matching Host and Container Paths for Stacks Directory:**
+> Because Dokidoki executes `docker compose` commands that talk to the host's Docker daemon via `/var/run/docker.sock`, any bind mounts specified in child stack compose files are evaluated relative to the **host filesystem**, not the container filesystem. Therefore, the stacks directory mount path inside the container and `DOKIDOKI_STACKS_DIR` **must match the host directory path identically** (e.g. `/home/user/stacks:/home/user/stacks` and `DOKIDOKI_STACKS_DIR=/home/user/stacks`, or `/opt/stacks:/opt/stacks`).
+
 > **Note on Advertised Address:** When running in Docker bridge network mode (default), set `DOKIDOKI_ADVERTISE_ADDR` to your host IP (e.g. `http://192.168.1.50:8080`) so other cluster nodes can reach this instance. Alternatively, you can use `network_mode: host`.
 
 Start the stack:

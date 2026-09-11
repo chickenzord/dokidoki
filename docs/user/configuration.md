@@ -45,7 +45,8 @@ Configuration settings are resolved using the following order of precedence:
 ### Stacks & Docker Storage
 
 - **`DOKIDOKI_STACKS_DIR` / `-stacks-dir`**
-  The root directory on the host where Compose stack folders are stored (e.g. `/opt/stacks/web`, `/opt/stacks/database`). Dokidoki scans this directory for `compose.yaml`, `compose.yml`, or `docker-compose.yml` files.
+  The root directory where Compose stack folders are stored (e.g. `/opt/stacks/web`, `/opt/stacks/database`). Dokidoki scans this directory for `compose.yaml`, `compose.yml`, or `docker-compose.yml` files.
+  > **Note:** When running Dokidoki in a Docker container, the volume mount target inside the container must match the host path identically (e.g., `-v /custom/stacks:/custom/stacks` with `DOKIDOKI_STACKS_DIR=/custom/stacks`) because the Docker daemon evaluates volume paths in child Compose files against the host's filesystem.
 
 - **`DOCKER_HOST` / `-docker-host`**
   Docker daemon connection string. By default, Dokidoki connects to the standard Docker socket at `/var/run/docker.sock`. To manage a remote engine, provide a TCP URL (e.g. `tcp://192.168.1.100:2375`).
