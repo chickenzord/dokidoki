@@ -457,7 +457,7 @@ success "Directory ready: ${DOKIDOKI_DIR}"
 # Build environment entries for compose
 ENV_BLOCK=""
 ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_PORT=${PORT}\n"
-ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_STACKS_DIR=/opt/stacks\n"
+ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_STACKS_DIR=${STACKS_DIR}\n"
 ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_NODE_NAME=${NODE_NAME}\n"
 
 if [ -n "$PEERS" ]; then
