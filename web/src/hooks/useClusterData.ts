@@ -18,12 +18,7 @@ export function getNodeEndpoint(node: Node): string {
   if (node.is_self) {
     return '';
   }
-  const addr = node.addresses?.[0];
-  if (!addr) return '';
-  if (addr.startsWith('http://') || addr.startsWith('https://')) {
-    return addr;
-  }
-  return `http://${addr}`;
+  return `/api/v1/nodes/${encodeURIComponent(node.id)}/proxy`;
 }
 
 export const CLUSTER_NODE_TIMEOUT_MS = 3500;
@@ -93,12 +88,14 @@ export function useClusterStacksQuery(selectedHostId?: string | null) {
             throw new Error(`Node ${node.name} has no reachable IP or address`);
           }
           const endpoint = getNodeEndpoint(node);
+          const rawAddress = node.addresses?.[0];
           const stacks = await api.getStacks(endpoint, undefined, { timeout: CLUSTER_NODE_TIMEOUT_MS });
           return stacks.map((s) => ({
             ...s,
             hostId: node.id,
             hostName: node.name,
             hostEndpoint: endpoint,
+            hostAddress: rawAddress,
           }));
         })
       );
@@ -154,12 +151,14 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
             throw new Error(`Node ${node.name} has no reachable IP or address`);
           }
           const endpoint = getNodeEndpoint(node);
+          const rawAddress = node.addresses?.[0];
           const containers = await api.getContainers(endpoint, undefined, { timeout: CLUSTER_NODE_TIMEOUT_MS });
           return containers.map((c) => ({
             ...c,
             hostId: node.id,
             hostName: node.name,
             hostEndpoint: endpoint,
+            hostAddress: rawAddress,
           }));
         })
       );

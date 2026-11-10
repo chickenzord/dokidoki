@@ -415,10 +415,10 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                           <td className="p-2.5 tabular-nums">
                             {p.publicPort ? (
                               <a
-                                href={`http://${getHostForContainer(container.hostEndpoint)}:${p.publicPort}`}
+                                href={`http://${getHostForContainer(container.hostEndpoint, container.hostAddress)}:${p.publicPort}`}
                                 target="_blank"
                                 rel="noreferrer"
-                                title={`Open service at http://${getHostForContainer(container.hostEndpoint)}:${p.publicPort}`}
+                                title={`Open service at http://${getHostForContainer(container.hostEndpoint, container.hostAddress)}:${p.publicPort}`}
                                 className="inline-flex items-center text-rose-400 hover:text-rose-300 hover:underline"
                               >
                                 <span>{p.publicPort}</span>

@@ -363,7 +363,7 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                         <div className="flex flex-wrap gap-1">
                           {container.ports.slice(0, 2).map((p, idx) => {
                             if (p.publicPort) {
-                              const targetHost = getHostForContainer(container.hostEndpoint);
+                              const targetHost = getHostForContainer(container.hostEndpoint, container.hostAddress);
                               return (
                                 <a
                                   key={idx}

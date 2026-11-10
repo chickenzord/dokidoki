@@ -61,6 +61,7 @@ export interface ClusterStack extends StackSummary {
   hostId: string;
   hostName: string;
   hostEndpoint: string;
+  hostAddress?: string;
   pending_import?: boolean;
 }
 
@@ -68,6 +69,7 @@ export interface ClusterContainer extends ContainerSummary {
   hostId: string;
   hostName: string;
   hostEndpoint: string;
+  hostAddress?: string;
 }
 
 export interface StackFile {

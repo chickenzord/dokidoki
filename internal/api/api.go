@@ -115,6 +115,7 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/nodes", s.handleAddNode)
 		r.Get("/nodes/{id}", s.handleGetNode)
 		r.Delete("/nodes/{id}", s.handleDeleteNode)
+		r.HandleFunc("/nodes/{id}/proxy/*", s.handleProxyNode)
 		r.Post("/cluster/handshake", s.handleHandshake)
 		r.Post("/cluster/heartbeat", s.handleHeartbeat)
 		r.Post("/cluster/leave", s.handleLeave)

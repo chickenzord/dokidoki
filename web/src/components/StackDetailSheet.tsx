@@ -76,6 +76,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const [activeOperation, setActiveOperation] = useState<OperationTask | null>(null);
 
   const hostEndpoint = initialStack?.hostEndpoint || '';
+  const hostAddress = initialStack?.hostAddress || '';
   const stackName = initialStack?.name || '';
 
   // Query live stack detail to keep modal in sync when operations finish
@@ -648,7 +649,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                               <div className="hidden sm:flex items-center gap-1">
                                 {container.ports.slice(0, 2).map((p, idx) => {
                                   if (p.publicPort) {
-                                    const targetHost = getHostForContainer(hostEndpoint);
+                                    const targetHost = getHostForContainer(hostEndpoint, hostAddress);
                                     return (
                                       <a
                                         key={idx}

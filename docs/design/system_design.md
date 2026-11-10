@@ -20,7 +20,7 @@ Managing Docker Compose stacks across multiple machines typically involves undes
 
 * **File-First on Host Filesystem:** Stacks are stored as standard Compose files on each host's local filesystem. Nodes remain fully autonomous; local stacks continue running normally even during network partitions.
 * **Decentralized Discovery:** Nodes discover each other via local network mDNS or HTTP peer exchange (PEX). There is no central cluster database or single point of failure.
-* **Direct Multi-Host Visibility:** The web interface retrieves cluster topology from the local node and queries connected nodes to present a consolidated view of stacks and containers.
+* **Unified Origin Access via Reverse Proxy:** The web interface connects to any active node and proxies remote node API requests through `/api/v1/nodes/{nodeId}/proxy/*` to avoid browser CORS, mixed-content, and HTTPS-Only mode issues.
 * **Standard Docker Integration:** Interacts directly with the local Docker daemon socket and Docker Compose CLI.
 
 ---
@@ -32,18 +32,20 @@ Managing Docker Compose stacks across multiple machines typically involves undes
                                 │
                1. Connect to any node: http://<node-ip>:<port>
                                 │
-               2. Retrieve cluster topology
+               2. Retrieve cluster topology & proxy remote node APIs
                                 │
-          ┌─────────────────────┼─────────────────────┐
-          ▼                     ▼                     ▼
-┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
-│      Node A      │  │      Node B      │  │      Node C      │
-│  Stacks Dir      │  │  Stacks Dir      │  │  Stacks Dir      │
-│  Docker Socket   │  │  Docker Socket   │  │  Docker Socket   │
-└────────┬─────────┘  └────────┬─────────┘  └────────┬─────────┘
-         │                     │                     │
-         └──── HTTP Heartbeats & Peer Exchange (PEX) ─┘
-               + Local Subnet Discovery via mDNS
+                                ▼
+                       ┌──────────────────┐
+                       │   Origin Node    │
+                       └────────┬─────────┘
+                                │ (Proxied requests + PEX Heartbeats)
+          ┌─────────────────────┴─────────────────────┐
+          ▼                                           ▼
+┌──────────────────┐                         ┌──────────────────┐
+│      Node B      │                         │      Node C      │
+│  Stacks Dir      │                         │  Stacks Dir      │
+│  Docker Socket   │                         │  Docker Socket   │
+└──────────────────┘                         └──────────────────┘
 ```
 
 ### Discovery & Clustering
