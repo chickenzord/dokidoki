@@ -182,7 +182,7 @@ export const ClusterNodesView: React.FC = () => {
                       {node.version ? (
                         <span className="inline-flex items-center gap-1 text-slate-400">
                           <Tag className="w-3 h-3 text-slate-500" />
-                          v{node.version}
+                          {node.version}
                         </span>
                       ) : (
                         <span className="text-slate-500">—</span>

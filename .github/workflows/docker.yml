@@ -50,7 +50,14 @@ jobs:
         id: vars
         run: |
           echo "build_time=$(date -u +'%Y-%m-%dT%H:%M:%SZ')" >> $GITHUB_OUTPUT
-          echo "commit_sha=$(git rev-parse --short HEAD)" >> $GITHUB_OUTPUT
+          COMMIT=$(git rev-parse --short HEAD)
+          echo "commit_sha=${COMMIT}" >> $GITHUB_OUTPUT
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            VERSION="${{ github.ref_name }}"
+          else
+            VERSION="${{ github.ref_name }}-${COMMIT}"
+          fi
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
 
       - name: Build and push by digest
         id: build
@@ -61,7 +68,7 @@ jobs:
           outputs: type=image,name=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }},push-by-digest=true,name-canonical=true,push=true
           labels: ${{ steps.meta.outputs.labels }}
           build-args: |
-            VERSION=${{ steps.meta.outputs.version }}
+            VERSION=${{ steps.vars.outputs.version }}
             COMMIT=${{ steps.vars.outputs.commit_sha }}
             BUILD_TIME=${{ steps.vars.outputs.build_time }}
           cache-from: type=registry,ref=${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:cache-${{ matrix.platform == 'linux/amd64' && 'amd64' || 'arm64' }}
