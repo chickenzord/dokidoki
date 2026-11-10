@@ -38,6 +38,7 @@ type ClusterService interface {
 	Self() cluster.Node
 	ListNodes() []cluster.Node
 	GetNode(id string) (*cluster.Node, bool)
+	AddPeer(ctx context.Context, address string) (*cluster.Node, error)
 	HandleHandshake(req cluster.HandshakeRequest) (*cluster.HandshakeResponse, error)
 	HandleHeartbeat(msg cluster.HeartbeatMessage) error
 	HandleLeave(nodeID string)

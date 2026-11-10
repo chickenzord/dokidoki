@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { useNodesQuery, useDeleteNodeMutation } from '../hooks/useClusterData';
+import { useNodesQuery, useDeleteNodeMutation, useAddNodeMutation } from '../hooks/useClusterData';
 import { Badge } from './ui/badge';
-import { Server, Radio, Globe, Tag, RefreshCw, AlertCircle, Loader2, Trash2, LogOut } from 'lucide-react';
+import { Server, Radio, Globe, Tag, RefreshCw, AlertCircle, Loader2, Trash2, LogOut, Plus } from 'lucide-react';
 import { Button } from './ui/button';
+import { Input } from './ui/input';
 import {
   Dialog,
   DialogContent,
@@ -16,10 +17,38 @@ import { Node } from '../types';
 export const ClusterNodesView: React.FC = () => {
   const { data: nodes = [], isLoading, error, refetch, isFetching } = useNodesQuery();
   const deleteMutation = useDeleteNodeMutation();
+  const addMutation = useAddNodeMutation();
 
   const [targetNode, setTargetNode] = useState<Node | null>(null);
+  const [isAddOpen, setIsAddOpen] = useState(false);
+  const [nodeAddress, setNodeAddress] = useState('');
+  const [addError, setAddError] = useState<string | null>(null);
 
   const aliveCount = nodes.filter((n) => n.status === 'alive').length;
+
+  const handleOpenAdd = () => {
+    setNodeAddress('');
+    setAddError(null);
+    setIsAddOpen(true);
+  };
+
+  const handleAddNode = async (e: React.FormEvent) => {
+    e.preventDefault();
+    const addr = nodeAddress.trim();
+    if (!addr) {
+      setAddError('Please enter a host or URL');
+      return;
+    }
+    setAddError(null);
+    try {
+      await addMutation.mutateAsync(addr);
+      setIsAddOpen(false);
+      setNodeAddress('');
+    } catch (err: any) {
+      const msg = err.message || 'Connection failed or invalid cluster token';
+      setAddError(msg);
+    }
+  };
 
   const handleConfirmAction = async () => {
     if (!targetNode) return;
@@ -49,6 +78,15 @@ export const ClusterNodesView: React.FC = () => {
           <Badge variant="outline" className="text-xs font-mono bg-slate-900 border-slate-700 text-slate-300">
             {aliveCount} / {nodes.length} online
           </Badge>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={handleOpenAdd}
+            className="h-8 px-2.5 text-xs border-slate-700 bg-slate-900 hover:bg-slate-800 text-slate-200 hover:text-white"
+          >
+            <Plus className="w-3.5 h-3.5 mr-1 text-rose-500" />
+            Add Node
+          </Button>
           <Button
             size="sm"
             variant="ghost"
@@ -246,6 +284,78 @@ export const ClusterNodesView: React.FC = () => {
               {targetNode?.is_self ? 'Confirm Leave' : 'Remove Node'}
             </Button>
           </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Add Node Dialog */}
+      <Dialog open={isAddOpen} onOpenChange={(open) => !open && !addMutation.isPending && setIsAddOpen(false)}>
+        <DialogContent className="sm:max-w-md bg-slate-900 border-slate-800 text-slate-100">
+          <form onSubmit={handleAddNode}>
+            <DialogHeader>
+              <DialogTitle className="text-base font-semibold flex items-center gap-2">
+                <Plus className="w-4 h-4 text-rose-500" />
+                Add Cluster Node
+              </DialogTitle>
+              <DialogDescription className="text-xs text-slate-400 mt-2">
+                Enter the IP address or hostname of another Dokidoki node. If it shares your cluster token, both nodes will pair immediately and exchange cluster topologies.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="py-4 space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1.5">
+                  Node URL or Host:Port
+                </label>
+                <Input
+                  type="text"
+                  placeholder="e.g. 192.168.1.50:8080 or http://192.168.1.50:8080"
+                  value={nodeAddress}
+                  onChange={(e) => {
+                    setNodeAddress(e.target.value);
+                    if (addError) setAddError(null);
+                  }}
+                  disabled={addMutation.isPending}
+                  className="bg-slate-950 border-slate-700 text-slate-200 text-xs font-mono focus-visible:ring-rose-500"
+                  autoFocus
+                />
+              </div>
+
+              {addError && (
+                <div className="p-3 bg-rose-950/60 border border-rose-800 rounded-md text-rose-300 text-xs flex items-center gap-2">
+                  <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0" />
+                  <span>{addError}</span>
+                </div>
+              )}
+            </div>
+
+            <DialogFooter className="mt-2 gap-2">
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => setIsAddOpen(false)}
+                disabled={addMutation.isPending}
+                className="border-slate-700 text-slate-300 hover:bg-slate-800"
+              >
+                Cancel
+              </Button>
+              <Button
+                type="submit"
+                size="sm"
+                disabled={addMutation.isPending || !nodeAddress.trim()}
+                className="bg-rose-600 hover:bg-rose-500 text-white border-0"
+              >
+                {addMutation.isPending ? (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin mr-1.5" />
+                    Connecting...
+                  </>
+                ) : (
+                  'Connect Node'
+                )}
+              </Button>
+            </DialogFooter>
+          </form>
         </DialogContent>
       </Dialog>
     </div>

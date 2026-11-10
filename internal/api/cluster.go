@@ -1,6 +1,7 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -38,6 +39,44 @@ func (s *Server) handleListNodes(w http.ResponseWriter, r *http.Request) {
 	}
 
 	writeJSON(w, http.StatusOK, nodes)
+}
+
+// handleAddNode handles POST /api/v1/nodes.
+func (s *Server) handleAddNode(w http.ResponseWriter, r *http.Request) {
+	if s.clusterSvc == nil {
+		writeError(w, http.StatusServiceUnavailable, "cluster manager not initialized")
+		return
+	}
+
+	var req struct {
+		Address string `json:"address"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		writeError(w, http.StatusBadRequest, "invalid request body")
+		return
+	}
+
+	if req.Address == "" {
+		writeError(w, http.StatusBadRequest, "address is required")
+		return
+	}
+
+	node, err := s.clusterSvc.AddPeer(r.Context(), req.Address)
+	if err != nil {
+		if errors.Is(err, cluster.ErrInvalidToken) {
+			writeError(w, http.StatusUnauthorized, "invalid cluster token")
+			return
+		}
+		if errors.Is(err, context.DeadlineExceeded) {
+			writeError(w, http.StatusGatewayTimeout, "connection timed out")
+			return
+		}
+		// Connection failed or handshake failed
+		writeError(w, http.StatusBadGateway, err.Error())
+		return
+	}
+
+	writeJSON(w, http.StatusCreated, node)
 }
 
 // handleGetNode handles GET /api/v1/nodes/{id}.

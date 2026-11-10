@@ -3,6 +3,7 @@ package cluster
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -1061,4 +1062,155 @@ func TestLeaveCluster(t *testing.T) {
 		t.Errorf("expected 0 persisted nodes after leave, got %d", len(persisted))
 	}
 }
+
+func TestAddPeer(t *testing.T) {
+	tempDir := t.TempDir()
+	selfNode := Node{
+		ID:        "self-node",
+		Name:      "Self Node",
+		Addresses: []string{"http://127.0.0.1:8080"},
+		Version:   "1.0.0",
+	}
+
+	remoteID := "remote-peer"
+	var receivedToken string
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/cluster/handshake" {
+			http.NotFound(w, r)
+			return
+		}
+		receivedToken = r.Header.Get("X-Cluster-Token")
+		if receivedToken == "bad-token" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		var hsReq HandshakeRequest
+		if err := json.NewDecoder(r.Body).Decode(&hsReq); err != nil {
+			w.WriteHeader(http.StatusBadRequest)
+			return
+		}
+		resp := HandshakeResponse{
+			NodeID:    remoteID,
+			Name:      "Remote Node",
+			Addresses: []string{"http://10.0.0.5:8080"},
+			Version:   "1.0.0",
+			Peers: []Node{
+				{
+					ID:        "gossip-peer",
+					Name:      "Gossip Peer",
+					Addresses: []string{"http://10.0.0.6:8080"},
+					Status:    StatusAlive,
+				},
+			},
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(resp)
+	}))
+	defer server.Close()
+
+	t.Run("SuccessAndGossipRegistration", func(t *testing.T) {
+		mgr := NewManager(selfNode, "secret-tok", 10*time.Second, server.Client(), tempDir)
+
+		// Address without http:// prefix and with trailing slash to test normalization
+		addr := strings.TrimPrefix(server.URL, "http://") + "/"
+		node, err := mgr.AddPeer(context.Background(), addr)
+		if err != nil {
+			t.Fatalf("AddPeer failed: %v", err)
+		}
+
+		if node.ID != remoteID {
+			t.Errorf("expected node ID %s, got %s", remoteID, node.ID)
+		}
+		if receivedToken != "secret-tok" {
+			t.Errorf("expected header token 'secret-tok', got %q", receivedToken)
+		}
+
+		// Verify remote peer registered in manager
+		got, ok := mgr.GetNode(remoteID)
+		if !ok || got.Status != StatusAlive {
+			t.Errorf("expected remote node alive in manager")
+		}
+
+		// Verify gossip-peer registered as well
+		gossipNode, ok := mgr.GetNode("gossip-peer")
+		if !ok || gossipNode.Status != StatusAlive {
+			t.Errorf("expected gossip peer to be registered")
+		}
+
+		// Verify persistence
+		persisted, err := LoadPersistedNodes(tempDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(persisted) < 2 {
+			t.Errorf("expected at least 2 persisted peers, got %d", len(persisted))
+		}
+	})
+
+	t.Run("UntombstonesNodeOnAdd", func(t *testing.T) {
+		mgr := NewManager(selfNode, "secret-tok", 10*time.Second, server.Client(), tempDir)
+
+		// Pre-populate peer and tombstone it
+		mgr.mu.Lock()
+		mgr.peers[remoteID] = &Node{ID: remoteID, Addresses: []string{server.URL}}
+		mgr.mu.Unlock()
+		if err := mgr.RemoveNode(remoteID, false); err != nil {
+			t.Fatal(err)
+		}
+
+		// Verify it is tombstoned
+		mgr.mu.RLock()
+		if !mgr.isTombstonedLocked(remoteID) {
+			mgr.mu.RUnlock()
+			t.Fatalf("expected remoteID to be tombstoned")
+		}
+		mgr.mu.RUnlock()
+
+		// AddPeer should resurrect it and clear tombstone
+		node, err := mgr.AddPeer(context.Background(), server.URL)
+		if err != nil {
+			t.Fatalf("AddPeer failed: %v", err)
+		}
+		if node.ID != remoteID {
+			t.Errorf("expected node ID %s, got %s", remoteID, node.ID)
+		}
+
+		mgr.mu.RLock()
+		if mgr.isTombstonedLocked(remoteID) {
+			t.Errorf("expected remoteID tombstone to be removed")
+		}
+		mgr.mu.RUnlock()
+
+		// Heartbeats from it should now be accepted
+		err = mgr.HandleHeartbeat(HeartbeatMessage{
+			NodeID:       remoteID,
+			Addresses:    []string{server.URL},
+			ClusterToken: "secret-tok",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, ok := mgr.GetNode(remoteID); !ok {
+			t.Errorf("peer should be present and updated")
+		}
+	})
+
+	t.Run("UnauthorizedToken", func(t *testing.T) {
+		mgr := NewManager(selfNode, "bad-token", 10*time.Second, server.Client(), tempDir)
+		_, err := mgr.AddPeer(context.Background(), server.URL)
+		if !errors.Is(err, ErrInvalidToken) {
+			t.Errorf("expected ErrInvalidToken, got %v", err)
+		}
+	})
+
+	t.Run("UnreachableTarget", func(t *testing.T) {
+		mgr := NewManager(selfNode, "secret-tok", 10*time.Second, server.Client(), tempDir)
+		_, err := mgr.AddPeer(context.Background(), "http://127.0.0.1:54321")
+		if err == nil {
+			t.Errorf("expected error for unreachable target")
+		}
+	})
+}
+
 

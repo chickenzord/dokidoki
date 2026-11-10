@@ -161,6 +161,18 @@ class ApiService {
     return this.request<Node[]>('/api/v1/nodes', { method: 'GET', ...options }, customEndpoint);
   }
 
+  public async addNode(address: string, customEndpoint?: string, options?: RequestOptions): Promise<Node> {
+    return this.request<Node>('/api/v1/nodes', {
+      method: 'POST',
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(options?.headers || {}),
+      },
+      body: JSON.stringify({ address }),
+    }, customEndpoint);
+  }
+
   public async deleteNode(id: string, customEndpoint?: string, options?: RequestOptions): Promise<{ status: string; message?: string }> {
     return this.request<{ status: string; message?: string }>(`/api/v1/nodes/${encodeURIComponent(id)}`, { method: 'DELETE', ...options }, customEndpoint);
   }

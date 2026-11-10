@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"sort"
@@ -419,6 +420,135 @@ func (m *Manager) validateToken(token string) error {
 		return ErrInvalidToken
 	}
 	return nil
+}
+
+// AddPeer manually connects to a remote node at address, performs handshake,
+// and registers the peer into the cluster topology.
+func (m *Manager) AddPeer(ctx context.Context, address string) (*Node, error) {
+	trimmed := strings.TrimSpace(address)
+	if trimmed == "" {
+		return nil, errors.New("address is required")
+	}
+	if !strings.HasPrefix(trimmed, "http://") && !strings.HasPrefix(trimmed, "https://") {
+		trimmed = "http://" + trimmed
+	}
+	trimmed = strings.TrimRight(trimmed, "/")
+
+	handshakeReq := HandshakeRequest{
+		NodeID:       m.self.ID,
+		Name:         m.self.Name,
+		Addresses:    m.self.Addresses,
+		Version:      m.self.Version,
+		ClusterToken: m.clusterToken,
+	}
+
+	body, err := json.Marshal(handshakeReq)
+	if err != nil {
+		return nil, err
+	}
+
+	target := trimmed + "/api/v1/cluster/handshake"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, target, bytes.NewReader(body))
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	if m.clusterToken != "" {
+		req.Header.Set("X-Cluster-Token", m.clusterToken)
+	}
+
+	resp, err := m.httpClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode == http.StatusUnauthorized {
+		return nil, ErrInvalidToken
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("handshake failed with status %d", resp.StatusCode)
+	}
+
+	var hsResp HandshakeResponse
+	if err := json.NewDecoder(resp.Body).Decode(&hsResp); err != nil {
+		return nil, fmt.Errorf("failed to decode handshake response: %w", err)
+	}
+
+	if hsResp.NodeID == "" {
+		return nil, errors.New("missing node_id in handshake response")
+	}
+
+	if hsResp.NodeID == m.self.ID {
+		return nil, errors.New("cannot add self as peer")
+	}
+
+	// Remote node addresses
+	addrs := hsResp.Addresses
+	if len(addrs) == 0 {
+		addrs = []string{trimmed}
+	}
+
+	m.mu.Lock()
+	// Clear tombstone if previously tombstoned (force-join / intentional re-join)
+	delete(m.tombstones, hsResp.NodeID)
+
+	var targetNode *Node
+	if peer, ok := m.peers[hsResp.NodeID]; ok {
+		peer.LastSeen = time.Now()
+		peer.Status = StatusAlive
+		peer.Name = hsResp.Name
+		peer.Addresses = append([]string(nil), addrs...)
+		peer.Version = hsResp.Version
+		targetNode = peer
+	} else {
+		targetNode = &Node{
+			ID:        hsResp.NodeID,
+			Name:      hsResp.Name,
+			Addresses: append([]string(nil), addrs...),
+			Status:    StatusAlive,
+			Version:   hsResp.Version,
+			IsSelf:    false,
+			LastSeen:  time.Now(),
+		}
+		m.peers[hsResp.NodeID] = targetNode
+	}
+
+	// Also merge any known peers returned in handshake response
+	for _, peer := range hsResp.Peers {
+		if peer.ID == m.self.ID || peer.ID == hsResp.NodeID || m.isTombstonedLocked(peer.ID) {
+			continue
+		}
+		if existing, ok := m.peers[peer.ID]; ok {
+			if len(existing.Addresses) == 0 && len(peer.Addresses) > 0 {
+				existing.Addresses = append([]string(nil), peer.Addresses...)
+			}
+		} else {
+			newNode := cloneNode(peer)
+			newNode.IsSelf = false
+			if newNode.Status == "" {
+				newNode.Status = StatusAlive
+			}
+			if newNode.LastSeen.IsZero() {
+				newNode.LastSeen = time.Now()
+			}
+			m.peers[peer.ID] = &newNode
+		}
+	}
+
+	snapshot := m.peerSnapshotLocked()
+	tombstonesSnapshot := m.tombstoneSnapshotLocked()
+	resNode := cloneNode(*targetNode)
+	m.mu.Unlock()
+
+	if snapshot != nil {
+		m.savePeers(snapshot)
+	}
+	if tombstonesSnapshot != nil {
+		m.saveTombstones(tombstonesSnapshot)
+	}
+
+	return &resNode, nil
 }
 
 // HandleHandshake processes an incoming handshake request from a peer.

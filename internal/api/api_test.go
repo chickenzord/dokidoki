@@ -1973,7 +1973,8 @@ func TestComposeOperationStreaming(t *testing.T) {
 }
 
 type mockClusterService struct {
-	nodes []cluster.Node
+	nodes       []cluster.Node
+	addPeerFunc func(ctx context.Context, address string) (*cluster.Node, error)
 }
 
 func (m *mockClusterService) ListNodes() []cluster.Node {
@@ -1987,6 +1988,20 @@ func (m *mockClusterService) GetNode(id string) (*cluster.Node, bool) {
 		}
 	}
 	return nil, false
+}
+
+func (m *mockClusterService) AddPeer(ctx context.Context, address string) (*cluster.Node, error) {
+	if m.addPeerFunc != nil {
+		return m.addPeerFunc(ctx, address)
+	}
+	newNode := &cluster.Node{
+		ID:        "node-added",
+		Name:      "Node Added",
+		Addresses: []string{address},
+		Status:    cluster.StatusAlive,
+	}
+	m.nodes = append(m.nodes, *newNode)
+	return newNode, nil
 }
 
 func (m *mockClusterService) HandleHandshake(req cluster.HandshakeRequest) (*cluster.HandshakeResponse, error) {
@@ -2232,6 +2247,95 @@ func (m *mockClusterHookService) LeaveCluster(ctx context.Context) error {
 	}
 	return m.mockClusterService.LeaveCluster(ctx)
 }
+
+func TestHandleAddNode(t *testing.T) {
+	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080}
+
+	t.Run("Success", func(t *testing.T) {
+		mockCluster := &mockClusterService{
+			addPeerFunc: func(ctx context.Context, address string) (*cluster.Node, error) {
+				return &cluster.Node{
+					ID:        "peer-added",
+					Name:      "Peer Added",
+					Addresses: []string{address},
+					Status:    cluster.StatusAlive,
+				}, nil
+			},
+		}
+		server := NewServer(cfg, &mockDocker{}, nil, mockCluster, "")
+		handler := server.Routes()
+
+		body := bytes.NewBufferString(`{"address":"http://192.168.1.100:8080"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusCreated {
+			t.Fatalf("expected 201 Created, got %d (body: %s)", w.Code, w.Body.String())
+		}
+		var node cluster.Node
+		if err := json.Unmarshal(w.Body.Bytes(), &node); err != nil {
+			t.Fatal(err)
+		}
+		if node.ID != "peer-added" || node.Addresses[0] != "http://192.168.1.100:8080" {
+			t.Errorf("unexpected node response: %+v", node)
+		}
+	})
+
+	t.Run("EmptyAddress", func(t *testing.T) {
+		mockCluster := &mockClusterService{}
+		server := NewServer(cfg, &mockDocker{}, nil, mockCluster, "")
+		handler := server.Routes()
+
+		body := bytes.NewBufferString(`{"address":""}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusBadRequest {
+			t.Fatalf("expected 400 Bad Request, got %d", w.Code)
+		}
+	})
+
+	t.Run("InvalidClusterToken", func(t *testing.T) {
+		mockCluster := &mockClusterService{
+			addPeerFunc: func(ctx context.Context, address string) (*cluster.Node, error) {
+				return nil, cluster.ErrInvalidToken
+			},
+		}
+		server := NewServer(cfg, &mockDocker{}, nil, mockCluster, "")
+		handler := server.Routes()
+
+		body := bytes.NewBufferString(`{"address":"http://192.168.1.100:8080"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusUnauthorized {
+			t.Fatalf("expected 401 Unauthorized, got %d", w.Code)
+		}
+	})
+
+	t.Run("TimeoutOrNetworkError", func(t *testing.T) {
+		mockCluster := &mockClusterService{
+			addPeerFunc: func(ctx context.Context, address string) (*cluster.Node, error) {
+				return nil, context.DeadlineExceeded
+			},
+		}
+		server := NewServer(cfg, &mockDocker{}, nil, mockCluster, "")
+		handler := server.Routes()
+
+		body := bytes.NewBufferString(`{"address":"http://192.168.1.100:8080"}`)
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusGatewayTimeout {
+			t.Fatalf("expected 504 Gateway Timeout, got %d", w.Code)
+		}
+	})
+}
+
 
 
 

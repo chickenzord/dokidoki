@@ -112,6 +112,7 @@ func (s *Server) Routes() http.Handler {
 
 		// Cluster routes
 		r.Get("/nodes", s.handleListNodes)
+		r.Post("/nodes", s.handleAddNode)
 		r.Get("/nodes/{id}", s.handleGetNode)
 		r.Delete("/nodes/{id}", s.handleDeleteNode)
 		r.Post("/cluster/handshake", s.handleHandshake)

@@ -36,6 +36,21 @@ export function useNodesQuery() {
   });
 }
 
+export function useAddNodeMutation() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (address: string) => {
+      return api.addNode(address);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ['nodes'] });
+      queryClient.invalidateQueries({ queryKey: ['cluster-stacks'] });
+      queryClient.invalidateQueries({ queryKey: ['cluster-containers'] });
+    },
+  });
+}
+
 export function useDeleteNodeMutation() {
   const queryClient = useQueryClient();
 
