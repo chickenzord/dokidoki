@@ -200,8 +200,12 @@ func (r *ContainerTaskRunner) StartTask(ctx context.Context, cfg Config) (*TaskI
 	binds = append(binds, fmt.Sprintf("%s:%s", cleanStacksDir, cleanStacksDir))
 	binds = append(binds, cfg.Binds...)
 
-	// Container name
-	containerName := fmt.Sprintf("dokidoki-task-%s", cfg.ID)
+	// Container name with short hash (first 8 chars of task ID or UUID)
+	shortID := cfg.ID
+	if len(shortID) > 8 {
+		shortID = shortID[:8]
+	}
+	containerName := fmt.Sprintf("dokidoki-task-%s", shortID)
 
 	// Wrap command to write logs and exit status inside the container.
 	// Container entrypoint/cmd runs sh:
