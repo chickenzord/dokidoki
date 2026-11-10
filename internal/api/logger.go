@@ -10,7 +10,7 @@ import (
 )
 
 // HTTPLogger returns a Chi-compatible request logger middleware that routes
-// logs through log/slog, logging heartbeat requests at debug level.
+// logs through log/slog, logging ping and heartbeat requests at debug level.
 func HTTPLogger() func(next http.Handler) http.Handler {
 	return chiMiddleware.RequestLogger(&httpLogFormatter{})
 }
@@ -27,10 +27,10 @@ type httpLogEntry struct {
 
 func (e *httpLogEntry) Write(status, bytes int, header http.Header, elapsed time.Duration, extra any) {
 	path := e.req.URL.Path
-	isHeartbeat := strings.HasSuffix(path, "/cluster/heartbeat")
+	isDebugPath := strings.HasSuffix(path, "/cluster/heartbeat") || strings.HasSuffix(path, "/host/ping") || path == "/ping"
 
 	level := slog.LevelInfo
-	if isHeartbeat {
+	if isDebugPath {
 		level = slog.LevelDebug
 	} else if status >= 500 {
 		level = slog.LevelError
