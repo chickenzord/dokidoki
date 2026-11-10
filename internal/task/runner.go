@@ -225,7 +225,8 @@ exit $EXIT_CODE`, shellCmd, escapeShellArg(logFile), escapeShellArg(statusFile))
 
 	createResp, err := r.dockerCli.CreateContainer(ctx, &container.Config{
 		Image:        image,
-		Cmd:          []string{"sh", "-c", script},
+		Entrypoint:   []string{"sh", "-c"},
+		Cmd:          []string{script},
 		WorkingDir:   workingDir,
 		Env:          env,
 		AttachStdout: false,
@@ -243,7 +244,8 @@ exit $EXIT_CODE`, shellCmd, escapeShellArg(logFile), escapeShellArg(statusFile))
 
 			createResp, err = r.dockerCli.CreateContainer(ctx, &container.Config{
 				Image:        image,
-				Cmd:          []string{"sh", "-c", script},
+				Entrypoint:   []string{"sh", "-c"},
+				Cmd:          []string{script},
 				WorkingDir:   workingDir,
 				Env:          env,
 				AttachStdout: false,
