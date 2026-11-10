@@ -153,7 +153,14 @@ func main() {
 	// Initialize API Router and HTTP Server
 	scanner := stack.NewScanner(cfg.StacksDir)
 	composeRunner := compose.NewRunner(cfg.DockerComposeBin, cfg.DockerHost)
-	taskRunner := task.NewContainerTaskRunner(dockerCli, cfg.StacksDir)
+
+	var taskRunnerOpts []task.Option
+	if selfContainerID != "" && dockerCli != nil {
+		if inspect, err := dockerCli.InspectContainer(context.Background(), selfContainerID); err == nil && inspect.Config != nil && inspect.Config.Image != "" {
+			taskRunnerOpts = append(taskRunnerOpts, task.WithDefaultImage(inspect.Config.Image))
+		}
+	}
+	taskRunner := task.NewContainerTaskRunner(dockerCli, cfg.StacksDir, taskRunnerOpts...)
 	stackSvc := stack.NewService(scanner, dockerCli, selfContainerID, stack.WithComposeRunner(composeRunner), stack.WithTaskRunner(taskRunner))
 	router := api.NewRouter(cfg, dockerCli, stackSvc, clusterManager, selfContainerID)
 

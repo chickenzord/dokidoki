@@ -235,6 +235,26 @@ exit $EXIT_CODE`, shellCmd, escapeShellArg(logFile), escapeShellArg(statusFile))
 		AutoRemove: true,
 	}, nil, nil, containerName)
 
+	if err != nil && (strings.Contains(strings.ToLower(err.Error()), "no such image") || strings.Contains(strings.ToLower(err.Error()), "not found")) {
+		// Attempt to pull the image and retry creation once
+		if rc, pullErr := r.dockerCli.PullImage(ctx, image); pullErr == nil && rc != nil {
+			_, _ = io.Copy(io.Discard, rc)
+			_ = rc.Close()
+
+			createResp, err = r.dockerCli.CreateContainer(ctx, &container.Config{
+				Image:        image,
+				Cmd:          []string{"sh", "-c", script},
+				WorkingDir:   workingDir,
+				Env:          env,
+				AttachStdout: false,
+				AttachStderr: false,
+			}, &container.HostConfig{
+				Binds:      binds,
+				AutoRemove: true,
+			}, nil, nil, containerName)
+		}
+	}
+
 	if err != nil {
 		info.Status = StatusFailed
 		info.Error = fmt.Sprintf("failed to create task container: %v", err)
