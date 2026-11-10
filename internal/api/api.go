@@ -11,6 +11,7 @@ import (
 	"github.com/chickenzord/dokidoki/internal/config"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/stack"
+	"github.com/chickenzord/dokidoki/internal/task"
 	"github.com/chickenzord/dokidoki/web"
 	"github.com/go-chi/chi/v5"
 	chiMiddleware "github.com/go-chi/chi/v5/middleware"
@@ -23,6 +24,7 @@ type Server struct {
 	dockerCli       docker.Client
 	stackSvc        StackService
 	clusterSvc      ClusterService
+	taskRunner      TaskRunner
 	stacksDir       string
 	selfContainerID string
 	webUI           http.Handler
@@ -33,17 +35,28 @@ func NewServer(cfg *config.Config, dockerCli docker.Client, stackSvc StackServic
 	if cfg == nil {
 		cfg = config.DefaultConfig()
 	}
+	var taskRunner TaskRunner
+	if dockerCli != nil && cfg.StacksDir != "" {
+		taskRunner = task.NewContainerTaskRunner(dockerCli, cfg.StacksDir)
+	}
 	if stackSvc == nil {
-		stackSvc = stack.NewService(stack.NewScanner(cfg.StacksDir), dockerCli, selfContainerID)
+		stackSvc = stack.NewService(stack.NewScanner(cfg.StacksDir), dockerCli, selfContainerID, stack.WithTaskRunner(taskRunner))
 	}
 	return &Server{
 		cfg:             cfg,
 		dockerCli:       dockerCli,
 		stackSvc:        stackSvc,
 		clusterSvc:      clusterSvc,
+		taskRunner:      taskRunner,
 		stacksDir:       cfg.StacksDir,
 		selfContainerID: selfContainerID,
 	}
+}
+
+// WithTaskRunner overrides the default TaskRunner.
+func (s *Server) WithTaskRunner(tr TaskRunner) *Server {
+	s.taskRunner = tr
+	return s
 }
 
 // WithWebUI replaces the default embedded Web UI handler. Intended for tests
@@ -105,6 +118,11 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/containers/{id}/start", s.handleStartContainer)
 		r.Post("/containers/{id}/stop", s.handleStopContainer)
 		r.Get("/containers/{id}/logs", s.handleContainerLogs)
+
+		// Tasks routes
+		r.Get("/tasks", s.handleListTasks)
+		r.Get("/tasks/{id}", s.handleGetTask)
+		r.Get("/tasks/{id}/logs", s.handleTaskLogs)
 
 		// Host routes
 		r.Get("/host", s.handleHostInfo)

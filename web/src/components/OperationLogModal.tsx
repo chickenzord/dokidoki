@@ -9,7 +9,8 @@ import {
 } from './ui/dialog';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
-import { Terminal as TerminalIcon, Copy, Check, Loader2, CheckCircle2, XCircle, AlertTriangle } from 'lucide-react';
+import { Terminal as TerminalIcon, Copy, Check, Loader2, CheckCircle2, XCircle, AlertTriangle, RefreshCw } from 'lucide-react';
+import { api } from '../services/api';
 import { Terminal as XTerm } from '@xterm/xterm';
 import { FitAddon } from '@xterm/addon-fit';
 import '@xterm/xterm/css/xterm.css';
@@ -162,6 +163,8 @@ export interface OperationTask {
     dimensions?: { cols?: number; rows?: number }
   ) => Promise<unknown>;
   onSuccess?: () => void;
+  isSelfUpdate?: boolean;
+  hostEndpoint?: string;
 }
 
 export interface OperationLogModalProps {
@@ -194,6 +197,7 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
   const [internalRunning, setInternalRunning] = useState(false);
   const [internalError, setInternalError] = useState<string | null>(null);
   const [internalSuccess, setInternalSuccess] = useState(false);
+  const [isReconnecting, setIsReconnecting] = useState(false);
   const [readyDimensions, setReadyDimensions] = useState<{ cols: number; rows: number } | null>(null);
   const activeOperationRef = useRef<OperationTask | null>(null);
   const terminalDimsRef = useRef<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
@@ -212,6 +216,7 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
     if (!isOpen) {
       setReadyDimensions(null);
       activeOperationRef.current = null;
+      setIsReconnecting(false);
     }
   }, [isOpen]);
 
@@ -227,6 +232,42 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
     return () => clearTimeout(timer);
   }, [isOpen, operation, readyDimensions]);
 
+  // Poll for reconnection if self-update dropped connection
+  const pollReconnect = useCallback(async (currentOp: OperationTask) => {
+    setIsReconnecting(true);
+    setInternalOutput((prev) => prev + '\n[Dokidoki] Server connection lost due to restart. Reconnecting to Dokidoki...\n');
+
+    const maxAttempts = 40; // up to ~80 seconds
+    const intervalMs = 2000;
+
+    for (let i = 0; i < maxAttempts; i++) {
+      if (activeOperationRef.current !== currentOp) return;
+      await new Promise((r) => setTimeout(r, intervalMs));
+      if (activeOperationRef.current !== currentOp) return;
+
+      try {
+        await api.ping(currentOp.hostEndpoint, { timeout: 1500 });
+        // Server is back!
+        if (activeOperationRef.current === currentOp) {
+          setIsReconnecting(false);
+          setInternalRunning(false);
+          setInternalSuccess(true);
+          setInternalOutput((prev) => prev + '[Dokidoki] Connected! Self-update completed successfully.\n');
+          currentOp.onSuccess?.();
+          return;
+        }
+      } catch {
+        // Still rebooting, keep waiting
+      }
+    }
+
+    if (activeOperationRef.current === currentOp) {
+      setIsReconnecting(false);
+      setInternalRunning(false);
+      setInternalError('Timed out waiting for Dokidoki to restart. Please refresh page.');
+    }
+  }, []);
+
   // Trigger streaming action ONLY when terminal has been built and reported its actual dimensions
   useEffect(() => {
     if (!isOpen || !operation || !readyDimensions) return;
@@ -236,6 +277,7 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
     setInternalOutput('');
     setInternalError(null);
     setInternalSuccess(false);
+    setIsReconnecting(false);
     setInternalRunning(true);
 
     operation
@@ -247,20 +289,22 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
       .then(() => {
         if (activeOperationRef.current === operation) {
           setInternalSuccess(true);
+          setInternalRunning(false);
           operation.onSuccess?.();
         }
       })
       .catch((err: any) => {
         if (activeOperationRef.current === operation) {
-          setInternalError(err?.message || 'Operation failed');
-        }
-      })
-      .finally(() => {
-        if (activeOperationRef.current === operation) {
-          setInternalRunning(false);
+          if (operation.isSelfUpdate) {
+            // Self-update stream connection drops when container restarts
+            pollReconnect(operation);
+          } else {
+            setInternalError(err?.message || 'Operation failed');
+            setInternalRunning(false);
+          }
         }
       });
-  }, [isOpen, operation, readyDimensions]);
+  }, [isOpen, operation, readyDimensions, pollReconnect]);
 
   const activeTitle = operation?.title || title;
   const activeSubtitle = operation?.subtitle || subtitle;
@@ -301,7 +345,12 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
               <TerminalIcon className="w-5 h-5 text-rose-500" />
               {activeTitle}
             </DialogTitle>
-            {activeRunning ? (
+            {isReconnecting ? (
+              <Badge variant="outline" className="bg-sky-950/40 text-sky-400 border-sky-800/60 font-mono text-xs flex items-center gap-1.5">
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                Reconnecting...
+              </Badge>
+            ) : activeRunning ? (
               <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-xs flex items-center gap-1.5">
                 <Loader2 className="w-3 h-3 animate-spin" />
                 Running
@@ -326,14 +375,21 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
         </DialogHeader>
 
         <div className="space-y-3">
-          {activeRunning && (
+          {isReconnecting ? (
+            <div className="p-2.5 bg-sky-950/30 border border-sky-800/50 rounded-lg text-sky-300 text-xs flex items-center gap-2">
+              <RefreshCw className="w-4 h-4 text-sky-400 shrink-0 animate-spin" />
+              <span>
+                Dokidoki is updating and restarting in the background. Polling until online...
+              </span>
+            </div>
+          ) : activeRunning ? (
             <div className="p-2.5 bg-amber-950/30 border border-amber-800/50 rounded-lg text-amber-300 text-xs flex items-center gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
               <span>
                 Please keep this page open. Navigating away or closing the tab may interrupt the running process.
               </span>
             </div>
-          )}
+          ) : null}
 
           <div className="relative group">
             {isOpen && (
@@ -370,7 +426,7 @@ export const OperationLogModal: React.FC<OperationLogModalProps> = ({
 
         <DialogFooter className="flex items-center justify-between sm:justify-between pt-2">
           <div className="text-xs text-slate-500">
-            {activeRunning ? 'Execution in progress, please wait...' : 'Operation finished.'}
+            {isReconnecting ? 'Reconnecting to Dokidoki...' : activeRunning ? 'Execution in progress, please wait...' : 'Operation finished.'}
           </div>
           <Button
             variant={activeRunning ? 'outline' : 'default'}

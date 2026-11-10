@@ -162,6 +162,14 @@ func Categorize(discovered []Discovered, containers []docker.Container) *Categor
 			}
 		}
 
+		isSelf := false
+		for _, c := range cList {
+			if c.IsSelf {
+				isSelf = true
+				break
+			}
+		}
+
 		summary := Summary{
 			Name:           d.Name,
 			Source:         string(SourceManaged),
@@ -170,6 +178,7 @@ func Categorize(discovered []Discovered, containers []docker.Container) *Categor
 			Rollup:         rollup,
 			Services:       services,
 			PendingImport:  pendingImport,
+			IsSelf:         isSelf,
 		}
 
 		detail := Detail{
@@ -190,6 +199,14 @@ func Categorize(discovered []Discovered, containers []docker.Container) *Categor
 		rollup := CalculateRollup(cList)
 		services := extractServices(cList)
 
+		isSelf := false
+		for _, c := range cList {
+			if c.IsSelf {
+				isSelf = true
+				break
+			}
+		}
+
 		summary := Summary{
 			Name:           stackName,
 			Source:         string(SourceExternal),
@@ -197,6 +214,7 @@ func Categorize(discovered []Discovered, containers []docker.Container) *Categor
 			ComposePath:    "",
 			Rollup:         rollup,
 			Services:       services,
+			IsSelf:         isSelf,
 		}
 
 		detail := Detail{

@@ -16,6 +16,7 @@ import (
 
 	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/docker"
+	"github.com/chickenzord/dokidoki/internal/task"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/client"
@@ -50,11 +51,19 @@ func WithComposeRunner(runner compose.Runner) ServiceOption {
 	}
 }
 
+// WithTaskRunner sets the task runner for background/detached tasks.
+func WithTaskRunner(tr task.Runner) ServiceOption {
+	return func(s *Service) {
+		s.taskRunner = tr
+	}
+}
+
 // Service provides domain logic for managing stacks and containers.
 type Service struct {
 	scanner         *Scanner
 	dockerCli       docker.Client
 	composeRunner   compose.Runner
+	taskRunner      task.Runner
 	selfContainerID string
 }
 
@@ -76,6 +85,16 @@ func (s *Service) getComposeRunner() compose.Runner {
 		return s.composeRunner
 	}
 	return compose.NewRunner("", "")
+}
+
+func (s *Service) getTaskRunner() task.Runner {
+	if s.taskRunner != nil {
+		return s.taskRunner
+	}
+	if s.dockerCli != nil && s.stacksDir() != "" {
+		return task.NewContainerTaskRunner(s.dockerCli, s.stacksDir())
+	}
+	return nil
 }
 
 func (s *Service) getCategorized(ctx context.Context) (*CategorizedResult, []types.Container, error) {
@@ -1029,23 +1048,40 @@ func (s *Service) resolveComposeFile(ctx context.Context, name string) (string, 
 // ComposeUp executes `docker compose up -d --remove-orphans` on the given stack.
 // If the stack is in PendingImport, it appends `--force-recreate` to ensure containers are recreated
 // and their labels/working_dir point to Dokidoki's stack directory.
+// When Dokidoki is running containerized and the target stack is Dokidoki itself (is_self),
+// it runs the compose command via a detached helper container task to prevent getting killed mid-execution.
 func (s *Service) ComposeUp(ctx context.Context, stackName string, out io.Writer) (*OperationResult, error) {
 	composePath, err := s.resolveComposeFile(ctx, stackName)
 	if err != nil {
 		return nil, err
 	}
 
+	var isSelfStack bool
+	var pendingImport bool
+	if categorized, _, err := s.getCategorized(ctx); err == nil && categorized != nil {
+		if detail, ok := categorized.GetStack(stackName); ok {
+			isSelfStack = detail.IsSelf
+			pendingImport = detail.PendingImport
+		}
+	}
+
+	var extraArgs []string
+	if pendingImport {
+		extraArgs = append(extraArgs, "--force-recreate")
+	}
+
+	// If containerized and updating self stack, run via detached task runner
+	if isSelfStack && s.selfContainerID != "" {
+		taskRunner := s.getTaskRunner()
+		if taskRunner != nil {
+			return s.runSelfComposeTask(ctx, stackName, composePath, out, append([]string{"up", "-d", "--remove-orphans"}, extraArgs...))
+		}
+	}
+
 	var buf bytes.Buffer
 	var writer io.Writer = &buf
 	if out != nil {
 		writer = io.MultiWriter(out, &buf)
-	}
-
-	var extraArgs []string
-	if categorized, _, err := s.getCategorized(ctx); err == nil && categorized != nil {
-		if detail, ok := categorized.GetStack(stackName); ok && detail.PendingImport {
-			extraArgs = append(extraArgs, "--force-recreate")
-		}
 	}
 
 	runner := s.getComposeRunner()
@@ -1056,6 +1092,47 @@ func (s *Service) ComposeUp(ctx context.Context, stackName string, out io.Writer
 	return &OperationResult{
 		Success: true,
 		Message: fmt.Sprintf("stack %s brought up successfully", stackName),
+		Output:  buf.String(),
+	}, nil
+}
+
+// runSelfComposeTask executes a compose command on Dokidoki's self stack in a detached helper container.
+func (s *Service) runSelfComposeTask(ctx context.Context, stackName string, composePath string, out io.Writer, composeSubcommand []string) (*OperationResult, error) {
+	taskRunner := s.getTaskRunner()
+	if taskRunner == nil {
+		return nil, errors.New("task runner unavailable")
+	}
+
+	cmdArgs := append([]string{"docker", "compose", "-f", filepath.Base(composePath)}, composeSubcommand...)
+	workingDir := filepath.Dir(composePath)
+
+	tInfo, err := taskRunner.StartTask(ctx, task.Config{
+		Description: fmt.Sprintf("Self-update %s: %s", stackName, strings.Join(composeSubcommand, " ")),
+		Command:     cmdArgs,
+		WorkingDir:  workingDir,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to dispatch detached self-update task: %w", err)
+	}
+
+	var buf bytes.Buffer
+	var writer io.Writer = &buf
+	if out != nil {
+		writer = io.MultiWriter(out, &buf)
+	}
+
+	// Tail task logs to out
+	_ = taskRunner.TailTaskLogs(ctx, tInfo.ID, writer, true)
+
+	// Fetch updated task info
+	latest, _ := taskRunner.GetTask(context.Background(), tInfo.ID)
+	if latest != nil && latest.Status == task.StatusFailed {
+		return nil, fmt.Errorf("self-update task failed: %s\n%s", latest.Error, buf.String())
+	}
+
+	return &OperationResult{
+		Success: true,
+		Message: fmt.Sprintf("stack %s self-update completed successfully", stackName),
 		Output:  buf.String(),
 	}, nil
 }
@@ -1099,6 +1176,25 @@ func (s *Service) ComposeRestart(ctx context.Context, stackName string, service 
 			if detail, ok := categorized.GetStack(stackName); ok && detail.PendingImport {
 				return s.ComposeUp(ctx, stackName, out)
 			}
+		}
+	}
+
+	var isSelfStack bool
+	if categorized, _, err := s.getCategorized(ctx); err == nil && categorized != nil {
+		if detail, ok := categorized.GetStack(stackName); ok {
+			isSelfStack = detail.IsSelf
+		}
+	}
+
+	// If containerized and restarting self stack (or service within self stack), run via detached task runner
+	if isSelfStack && s.selfContainerID != "" {
+		taskRunner := s.getTaskRunner()
+		if taskRunner != nil {
+			args := []string{"restart"}
+			if service != "" {
+				args = append(args, service)
+			}
+			return s.runSelfComposeTask(ctx, stackName, composePath, out, args)
 		}
 	}
 

@@ -3,12 +3,23 @@ package api
 import (
 	"context"
 	"io"
+	"time"
 
 	"github.com/chickenzord/dokidoki/internal/cluster"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/stack"
+	"github.com/chickenzord/dokidoki/internal/task"
 	"github.com/docker/docker/api/types/container"
 )
+
+// TaskRunner defines the task runner methods needed by the API.
+type TaskRunner interface {
+	StartTask(ctx context.Context, cfg task.Config) (*task.TaskInfo, error)
+	GetTask(ctx context.Context, id string) (*task.TaskInfo, error)
+	TailTaskLogs(ctx context.Context, id string, out io.Writer, follow bool) error
+	ListTasks(ctx context.Context) ([]*task.TaskInfo, error)
+	PruneTasks(ctx context.Context, olderThan time.Duration) (int, error)
+}
 
 // StackService defines the domain operations for managing stacks and containers.
 type StackService interface {

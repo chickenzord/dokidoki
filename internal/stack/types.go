@@ -49,6 +49,7 @@ type Summary struct {
 	Rollup          Rollup   `json:"rollup"`
 	Services        []string `json:"services"`
 	PendingImport  bool     `json:"pending_import"`
+	IsSelf          bool     `json:"is_self"`
 }
 
 // Detail provides the Summary plus full container details.

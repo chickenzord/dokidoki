@@ -351,11 +351,18 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
 
   const handleComposeUp = () => {
     if (!stack) return;
+    if (stack.is_self) {
+      if (!window.confirm('Notice: This stack contains Dokidoki itself. The container will be updated in the background, and the UI will automatically reconnect once online. Continue?')) {
+        return;
+      }
+    }
     setActiveOperation({
       title: `Compose Up: ${stack.name}`,
       subtitle: `Host: ${stack.hostName} | Command: docker compose up -d --remove-orphans`,
       action: (onChunk, dims) => api.composeUp(stack.name, onChunk, hostEndpoint, dims),
       onSuccess: invalidateStackData,
+      isSelfUpdate: Boolean(stack.is_self),
+      hostEndpoint,
     });
   };
 
@@ -382,7 +389,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   const handleComposeRestart = (service?: string) => {
     if (!stack) return;
     if (stack.is_self) {
-      if (!window.confirm('Warning: This stack contains Dokidoki itself. Restarting it may interrupt your connection. Continue?')) {
+      if (!window.confirm('Notice: This stack contains Dokidoki itself. The container will be updated in the background, and the UI will automatically reconnect once online. Continue?')) {
         return;
       }
     }
@@ -393,6 +400,8 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
       subtitle: `Host: ${stack.hostName} | Command: docker compose restart ${service || ''}`.trim(),
       action: (onChunk, dims) => api.composeRestart(stack.name, service, onChunk, hostEndpoint, dims),
       onSuccess: invalidateStackData,
+      isSelfUpdate: Boolean(stack.is_self),
+      hostEndpoint,
     });
   };
 

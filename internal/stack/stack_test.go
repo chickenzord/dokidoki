@@ -1,6 +1,7 @@
 package stack
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
@@ -8,8 +9,10 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/chickenzord/dokidoki/internal/docker"
+	"github.com/chickenzord/dokidoki/internal/task"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/network"
@@ -2031,4 +2034,202 @@ func TestService_ContainerLogs(t *testing.T) {
 			t.Errorf("expected returned reader to match mock")
 		}
 	})
+
+	t.Run("ComposeUp_SelfStack_DetachedTaskRunner", func(t *testing.T) {
+		tempDir := t.TempDir()
+		stackDir := filepath.Join(tempDir, "dokidoki")
+		if err := os.MkdirAll(stackDir, 0755); err != nil {
+			t.Fatalf("failed to create stack dir: %v", err)
+		}
+		composePath := filepath.Join(stackDir, "compose.yaml")
+		if err := os.WriteFile(composePath, []byte("services:\n  dokidoki:\n    image: dokidoki:latest\n"), 0644); err != nil {
+			t.Fatalf("failed to write compose.yaml: %v", err)
+		}
+
+		selfID := "self-container-123"
+		mockDocker := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    selfID,
+						Names: []string{"/dokidoki"},
+						State: "running",
+						Labels: map[string]string{
+							"com.docker.compose.project": "dokidoki",
+						},
+					},
+				}, nil
+			},
+		}
+
+		var taskStarted bool
+		var startedCfg task.Config
+		mockTR := &mockTaskRunner{
+			startTaskFn: func(ctx context.Context, cfg task.Config) (*task.TaskInfo, error) {
+				taskStarted = true
+				startedCfg = cfg
+				now := time.Now()
+				exitZero := 0
+				return &task.TaskInfo{
+					ID:        "task-123",
+					Status:    task.StatusCompleted,
+					ExitCode:  &exitZero,
+					CreatedAt: now,
+				}, nil
+			},
+			getTaskFn: func(ctx context.Context, id string) (*task.TaskInfo, error) {
+				exitZero := 0
+				return &task.TaskInfo{
+					ID:       id,
+					Status:   task.StatusCompleted,
+					ExitCode: &exitZero,
+				}, nil
+			},
+			tailTaskLogsFn: func(ctx context.Context, id string, out io.Writer, follow bool) error {
+				_, _ = out.Write([]byte("Container recreated\n"))
+				return nil
+			},
+		}
+
+		svc := NewService(NewScanner(tempDir), mockDocker, selfID, WithTaskRunner(mockTR))
+
+		var out bytes.Buffer
+		res, err := svc.ComposeUp(context.Background(), "dokidoki", &out)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+		if !taskStarted {
+			t.Fatalf("expected task runner to be called for self-update")
+		}
+		if startedCfg.WorkingDir != stackDir {
+			t.Errorf("expected working dir %s, got %s", stackDir, startedCfg.WorkingDir)
+		}
+		if !strings.Contains(out.String(), "Container recreated") {
+			t.Errorf("expected logs streamed, got %q", out.String())
+		}
+	})
+
+	t.Run("ComposeRestart_SelfStack_DetachedTaskRunner", func(t *testing.T) {
+		tempDir := t.TempDir()
+		stackDir := filepath.Join(tempDir, "dokidoki")
+		if err := os.MkdirAll(stackDir, 0755); err != nil {
+			t.Fatalf("failed to create stack dir: %v", err)
+		}
+		composePath := filepath.Join(stackDir, "compose.yaml")
+		if err := os.WriteFile(composePath, []byte("services:\n  dokidoki:\n    image: dokidoki:latest\n"), 0644); err != nil {
+			t.Fatalf("failed to write compose.yaml: %v", err)
+		}
+
+		selfID := "self-container-123"
+		mockDocker := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    selfID,
+						Names: []string{"/dokidoki"},
+						State: "running",
+						Labels: map[string]string{
+							"com.docker.compose.project": "dokidoki",
+						},
+					},
+				}, nil
+			},
+		}
+
+		var taskStarted bool
+		var startedCfg task.Config
+		mockTR := &mockTaskRunner{
+			startTaskFn: func(ctx context.Context, cfg task.Config) (*task.TaskInfo, error) {
+				taskStarted = true
+				startedCfg = cfg
+				now := time.Now()
+				exitZero := 0
+				return &task.TaskInfo{
+					ID:        "task-restart-123",
+					Status:    task.StatusCompleted,
+					ExitCode:  &exitZero,
+					CreatedAt: now,
+				}, nil
+			},
+			getTaskFn: func(ctx context.Context, id string) (*task.TaskInfo, error) {
+				exitZero := 0
+				return &task.TaskInfo{
+					ID:       id,
+					Status:   task.StatusCompleted,
+					ExitCode: &exitZero,
+				}, nil
+			},
+			tailTaskLogsFn: func(ctx context.Context, id string, out io.Writer, follow bool) error {
+				_, _ = out.Write([]byte("Restarting dokidoki\n"))
+				return nil
+			},
+		}
+
+		svc := NewService(NewScanner(tempDir), mockDocker, selfID, WithTaskRunner(mockTR))
+
+		var out bytes.Buffer
+		res, err := svc.ComposeRestart(context.Background(), "dokidoki", "web", &out)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+		if !taskStarted {
+			t.Fatalf("expected task runner to be called for self restart")
+		}
+		if startedCfg.WorkingDir != stackDir {
+			t.Errorf("expected working dir %s, got %s", stackDir, startedCfg.WorkingDir)
+		}
+		expectedCmd := "docker compose -f compose.yaml restart web"
+		if strings.Join(startedCfg.Command, " ") != expectedCmd {
+			t.Errorf("expected command %q, got %q", expectedCmd, strings.Join(startedCfg.Command, " "))
+		}
+	})
+}
+
+type mockTaskRunner struct {
+	startTaskFn    func(ctx context.Context, cfg task.Config) (*task.TaskInfo, error)
+	getTaskFn      func(ctx context.Context, id string) (*task.TaskInfo, error)
+	tailTaskLogsFn func(ctx context.Context, id string, out io.Writer, follow bool) error
+	listTasksFn    func(ctx context.Context) ([]*task.TaskInfo, error)
+	pruneTasksFn   func(ctx context.Context, olderThan time.Duration) (int, error)
+}
+
+func (m *mockTaskRunner) StartTask(ctx context.Context, cfg task.Config) (*task.TaskInfo, error) {
+	if m.startTaskFn != nil {
+		return m.startTaskFn(ctx, cfg)
+	}
+	return nil, nil
+}
+
+func (m *mockTaskRunner) GetTask(ctx context.Context, id string) (*task.TaskInfo, error) {
+	if m.getTaskFn != nil {
+		return m.getTaskFn(ctx, id)
+	}
+	return nil, nil
+}
+
+func (m *mockTaskRunner) TailTaskLogs(ctx context.Context, id string, out io.Writer, follow bool) error {
+	if m.tailTaskLogsFn != nil {
+		return m.tailTaskLogsFn(ctx, id, out, follow)
+	}
+	return nil
+}
+
+func (m *mockTaskRunner) ListTasks(ctx context.Context) ([]*task.TaskInfo, error) {
+	if m.listTasksFn != nil {
+		return m.listTasksFn(ctx)
+	}
+	return nil, nil
+}
+
+func (m *mockTaskRunner) PruneTasks(ctx context.Context, olderThan time.Duration) (int, error) {
+	if m.pruneTasksFn != nil {
+		return m.pruneTasksFn(ctx, olderThan)
+	}
+	return 0, nil
 }

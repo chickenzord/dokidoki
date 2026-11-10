@@ -20,6 +20,7 @@ import (
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/logger"
 	"github.com/chickenzord/dokidoki/internal/stack"
+	"github.com/chickenzord/dokidoki/internal/task"
 )
 
 var (
@@ -152,7 +153,8 @@ func main() {
 	// Initialize API Router and HTTP Server
 	scanner := stack.NewScanner(cfg.StacksDir)
 	composeRunner := compose.NewRunner(cfg.DockerComposeBin, cfg.DockerHost)
-	stackSvc := stack.NewService(scanner, dockerCli, selfContainerID, stack.WithComposeRunner(composeRunner))
+	taskRunner := task.NewContainerTaskRunner(dockerCli, cfg.StacksDir)
+	stackSvc := stack.NewService(scanner, dockerCli, selfContainerID, stack.WithComposeRunner(composeRunner), stack.WithTaskRunner(taskRunner))
 	router := api.NewRouter(cfg, dockerCli, stackSvc, clusterManager, selfContainerID)
 
 	server := &http.Server{

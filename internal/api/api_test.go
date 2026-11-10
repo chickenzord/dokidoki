@@ -22,6 +22,7 @@ import (
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/logger"
 	"github.com/chickenzord/dokidoki/internal/stack"
+	"github.com/chickenzord/dokidoki/internal/task"
 	"github.com/chickenzord/dokidoki/web"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -2332,6 +2333,136 @@ func TestHandleAddNode(t *testing.T) {
 
 		if w.Code != http.StatusGatewayTimeout {
 			t.Fatalf("expected 504 Gateway Timeout, got %d", w.Code)
+		}
+	})
+}
+
+type mockTaskRunnerAPI struct {
+	tasks       map[string]*task.TaskInfo
+	logs        map[string]string
+	listTasksFn func(ctx context.Context) ([]*task.TaskInfo, error)
+	getTaskFn   func(ctx context.Context, id string) (*task.TaskInfo, error)
+}
+
+func (m *mockTaskRunnerAPI) StartTask(ctx context.Context, cfg task.Config) (*task.TaskInfo, error) {
+	return nil, nil
+}
+
+func (m *mockTaskRunnerAPI) GetTask(ctx context.Context, id string) (*task.TaskInfo, error) {
+	if m.getTaskFn != nil {
+		return m.getTaskFn(ctx, id)
+	}
+	if t, ok := m.tasks[id]; ok {
+		return t, nil
+	}
+	return nil, os.ErrNotExist
+}
+
+func (m *mockTaskRunnerAPI) TailTaskLogs(ctx context.Context, id string, out io.Writer, follow bool) error {
+	if l, ok := m.logs[id]; ok {
+		_, err := out.Write([]byte(l))
+		return err
+	}
+	return os.ErrNotExist
+}
+
+func (m *mockTaskRunnerAPI) ListTasks(ctx context.Context) ([]*task.TaskInfo, error) {
+	if m.listTasksFn != nil {
+		return m.listTasksFn(ctx)
+	}
+	var res []*task.TaskInfo
+	for _, t := range m.tasks {
+		res = append(res, t)
+	}
+	return res, nil
+}
+
+func (m *mockTaskRunnerAPI) PruneTasks(ctx context.Context, olderThan time.Duration) (int, error) {
+	return 0, nil
+}
+
+func TestTasksAPI(t *testing.T) {
+	exitZero := 0
+	task1 := &task.TaskInfo{
+		ID:          "task-1",
+		Description: "Self update",
+		Status:      task.StatusCompleted,
+		ExitCode:    &exitZero,
+		CreatedAt:   time.Now(),
+	}
+
+	mockTR := &mockTaskRunnerAPI{
+		tasks: map[string]*task.TaskInfo{
+			"task-1": task1,
+		},
+		logs: map[string]string{
+			"task-1": "Recreating dokidoki container\nDone!\n",
+		},
+	}
+
+	cfg := &config.Config{
+		Bind:      "127.0.0.1",
+		Port:      8080,
+		StacksDir: t.TempDir(),
+	}
+
+	server := NewServer(cfg, &mockDocker{}, nil, nil, "").WithTaskRunner(mockTR)
+	handler := server.Routes()
+
+	t.Run("ListTasks", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var list []*task.TaskInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &list); err != nil {
+			t.Fatalf("failed to decode JSON: %v", err)
+		}
+		if len(list) != 1 || list[0].ID != "task-1" {
+			t.Errorf("unexpected tasks list: %+v", list)
+		}
+	})
+
+	t.Run("GetTask_Found", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/task-1", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var fetched task.TaskInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &fetched); err != nil {
+			t.Fatalf("failed to decode JSON: %v", err)
+		}
+		if fetched.ID != "task-1" || fetched.Status != task.StatusCompleted {
+			t.Errorf("unexpected task: %+v", fetched)
+		}
+	})
+
+	t.Run("GetTask_NotFound", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/missing", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("expected 404, got %d", w.Code)
+		}
+	})
+
+	t.Run("GetTaskLogs", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/tasks/task-1/logs", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if !strings.Contains(w.Body.String(), "Recreating dokidoki container") {
+			t.Errorf("unexpected logs: %q", w.Body.String())
 		}
 	})
 }
