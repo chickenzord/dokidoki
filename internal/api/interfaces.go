@@ -35,10 +35,12 @@ type StackService interface {
 
 // ClusterService defines the cluster coordination operations required by the API.
 type ClusterService interface {
+	Self() cluster.Node
 	ListNodes() []cluster.Node
 	GetNode(id string) (*cluster.Node, bool)
 	HandleHandshake(req cluster.HandshakeRequest) (*cluster.HandshakeResponse, error)
 	HandleHeartbeat(msg cluster.HeartbeatMessage) error
 	HandleLeave(nodeID string)
-	RemoveNode(nodeID string) error
+	RemoveNode(nodeID string, broadcast ...bool) error
+	LeaveCluster(ctx context.Context) error
 }

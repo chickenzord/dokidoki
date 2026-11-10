@@ -1,13 +1,35 @@
-import React from 'react';
-import { useNodesQuery } from '../hooks/useClusterData';
+import React, { useState } from 'react';
+import { useNodesQuery, useDeleteNodeMutation } from '../hooks/useClusterData';
 import { Badge } from './ui/badge';
-import { Server, Radio, Globe, Tag, RefreshCw, AlertCircle, Loader2 } from 'lucide-react';
+import { Server, Radio, Globe, Tag, RefreshCw, AlertCircle, Loader2, Trash2, LogOut } from 'lucide-react';
 import { Button } from './ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from './ui/dialog';
+import { Node } from '../types';
 
 export const ClusterNodesView: React.FC = () => {
   const { data: nodes = [], isLoading, error, refetch, isFetching } = useNodesQuery();
+  const deleteMutation = useDeleteNodeMutation();
+
+  const [targetNode, setTargetNode] = useState<Node | null>(null);
 
   const aliveCount = nodes.filter((n) => n.status === 'alive').length;
+
+  const handleConfirmAction = async () => {
+    if (!targetNode) return;
+    try {
+      await deleteMutation.mutateAsync(targetNode.id);
+      setTargetNode(null);
+    } catch (e) {
+      console.error('Failed to perform cluster node action:', e);
+    }
+  };
 
   return (
     <div className="space-y-4">
@@ -66,6 +88,7 @@ export const ClusterNodesView: React.FC = () => {
                 <th className="p-3.5">Addresses</th>
                 <th className="p-3.5">Dokidoki Version</th>
                 <th className="p-3.5">Node ID</th>
+                <th className="p-3.5 text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800/60 font-mono">
@@ -131,6 +154,32 @@ export const ClusterNodesView: React.FC = () => {
                     <td className="p-3.5 text-slate-500 text-[11px] truncate max-w-[140px]" title={node.id}>
                       {node.id}
                     </td>
+
+                    <td className="p-3.5 text-right font-sans">
+                      {node.is_self ? (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setTargetNode(node)}
+                          className="h-7 px-2 text-xs text-amber-400/80 hover:text-amber-300 hover:bg-amber-950/30"
+                          title="Leave Cluster"
+                        >
+                          <LogOut className="w-3.5 h-3.5 mr-1" />
+                          Leave Cluster
+                        </Button>
+                      ) : (
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setTargetNode(node)}
+                          className="h-7 px-2 text-xs text-rose-400/80 hover:text-rose-300 hover:bg-rose-950/30"
+                          title="Delete Node"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 mr-1" />
+                          Delete
+                        </Button>
+                      )}
+                    </td>
                   </tr>
                 );
               })}
@@ -138,6 +187,67 @@ export const ClusterNodesView: React.FC = () => {
           </table>
         </div>
       )}
+
+      {/* Confirmation Dialog */}
+      <Dialog open={targetNode !== null} onOpenChange={(open) => !open && setTargetNode(null)}>
+        <DialogContent className="sm:max-w-md bg-slate-900 border-slate-800 text-slate-100">
+          <DialogHeader>
+            <DialogTitle className="text-base font-semibold">
+              {targetNode?.is_self ? 'Leave Cluster?' : 'Remove Node from Cluster?'}
+            </DialogTitle>
+            <DialogDescription className="text-xs text-slate-400 mt-2">
+              {targetNode?.is_self ? (
+                <>
+                  This will detach this node (<span className="text-slate-200 font-mono font-medium">{targetNode?.name}</span>) from the cluster and reset it to standalone mode. Local stacks remain unaffected.
+                </>
+              ) : (
+                <>
+                  Are you sure you want to remove node{' '}
+                  <span className="text-slate-200 font-mono font-medium">{targetNode?.name}</span> ({targetNode?.id}) from the cluster? It will be marked with a tombstone to prevent resurrection.
+                </>
+              )}
+            </DialogDescription>
+          </DialogHeader>
+
+          {deleteMutation.isError && (
+            <div className="p-3 bg-rose-950/50 border border-rose-800 rounded text-rose-300 text-xs">
+              {(deleteMutation.error as Error)?.message || 'Action failed'}
+            </div>
+          )}
+
+          <DialogFooter className="mt-4 gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setTargetNode(null)}
+              disabled={deleteMutation.isPending}
+              className="border-slate-700 text-slate-300 hover:bg-slate-800"
+            >
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              size="sm"
+              onClick={handleConfirmAction}
+              disabled={deleteMutation.isPending}
+              className={
+                targetNode?.is_self
+                  ? 'bg-amber-600 hover:bg-amber-500 text-white border-0'
+                  : 'bg-rose-600 hover:bg-rose-500 text-white border-0'
+              }
+            >
+              {deleteMutation.isPending ? (
+                <Loader2 className="w-3.5 h-3.5 animate-spin mr-1" />
+              ) : targetNode?.is_self ? (
+                <LogOut className="w-3.5 h-3.5 mr-1" />
+              ) : (
+                <Trash2 className="w-3.5 h-3.5 mr-1" />
+              )}
+              {targetNode?.is_self ? 'Confirm Leave' : 'Remove Node'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 };

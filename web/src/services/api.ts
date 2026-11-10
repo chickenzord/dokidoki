@@ -161,6 +161,10 @@ class ApiService {
     return this.request<Node[]>('/api/v1/nodes', { method: 'GET', ...options }, customEndpoint);
   }
 
+  public async deleteNode(id: string, customEndpoint?: string, options?: RequestOptions): Promise<{ status: string; message?: string }> {
+    return this.request<{ status: string; message?: string }>(`/api/v1/nodes/${encodeURIComponent(id)}`, { method: 'DELETE', ...options }, customEndpoint);
+  }
+
   public async getStacks(customEndpoint?: string, source?: string, options?: RequestOptions): Promise<StackSummary[]> {
     const query = source && source !== 'all' ? `?source=${encodeURIComponent(source)}` : '';
     return this.request<StackSummary[]>(`/api/v1/stacks${query}`, { method: 'GET', ...options }, customEndpoint);

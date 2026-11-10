@@ -26,6 +26,7 @@ type Manager struct {
 	mu           sync.RWMutex
 	persistMu    sync.Mutex
 	peers        map[string]*Node
+	tombstones   map[string]time.Time
 	clusterToken string
 	ttl          time.Duration
 	stacksDir    string
@@ -54,10 +55,23 @@ func NewManager(self Node, clusterToken string, ttl time.Duration, httpClient *h
 	self.Status = StatusAlive
 
 	peers := make(map[string]*Node)
+	tombstones := make(map[string]time.Time)
 	if stacksDir != "" {
+		if loadedTombstones, err := LoadPersistedTombstones(stacksDir); err == nil {
+			tombstones = loadedTombstones
+			if len(tombstones) > 0 {
+				slog.Info("Cluster: loaded persisted tombstone(s)", "count", len(tombstones), "path", TombstonesFilePath(stacksDir))
+			}
+		} else {
+			slog.Warn("Cluster: failed to load persisted tombstones", "error", err)
+		}
+
 		if loaded, err := LoadPersistedNodes(stacksDir); err == nil {
 			for _, n := range loaded {
 				if n.ID == "" || n.ID == self.ID {
+					continue
+				}
+				if _, isDead := tombstones[n.ID]; isDead {
 					continue
 				}
 				nodeCopy := n
@@ -78,6 +92,7 @@ func NewManager(self Node, clusterToken string, ttl time.Duration, httpClient *h
 	return &Manager{
 		self:         self,
 		peers:        peers,
+		tombstones:   tombstones,
 		clusterToken: clusterToken,
 		ttl:          ttl,
 		stacksDir:    stacksDir,
@@ -237,12 +252,29 @@ func (m *Manager) EvictExpiredPeers() {
 	}
 }
 
+func (m *Manager) isTombstonedLocked(nodeID string) bool {
+	ts, ok := m.tombstones[nodeID]
+	if !ok {
+		return false
+	}
+	if time.Since(ts) > defaultTombstoneTTL {
+		delete(m.tombstones, nodeID)
+		return false
+	}
+	return true
+}
+
 func (m *Manager) handlePeerEvent(ev PeerEvent) {
 	if ev.NodeID == "" || ev.NodeID == m.self.ID {
 		return
 	}
 
 	m.mu.Lock()
+	if m.isTombstonedLocked(ev.NodeID) {
+		m.mu.Unlock()
+		return
+	}
+
 	changed := false
 	switch ev.Type {
 	case EventDiscovered, EventUpdated:
@@ -402,7 +434,7 @@ func (m *Manager) HandleHandshake(req HandshakeRequest) (*HandshakeResponse, err
 
 	m.mu.Lock()
 	var snapshot []Node
-	if req.NodeID != m.self.ID {
+	if req.NodeID != m.self.ID && !m.isTombstonedLocked(req.NodeID) {
 		var reqAddrs []string
 		if len(req.Addresses) > 0 {
 			reqAddrs = append([]string(nil), req.Addresses...)
@@ -469,6 +501,11 @@ func (m *Manager) HandleHeartbeat(msg HeartbeatMessage) error {
 	slog.Debug("Cluster: received heartbeat", "node_id", msg.NodeID, "addresses", msg.Addresses)
 
 	m.mu.Lock()
+	if m.isTombstonedLocked(msg.NodeID) {
+		m.mu.Unlock()
+		return nil
+	}
+
 	changed := false
 	var addrs []string
 	if len(msg.Addresses) > 0 {
@@ -497,7 +534,7 @@ func (m *Manager) HandleHeartbeat(msg HeartbeatMessage) error {
 
 	// PEX merge for newly learned peers
 	for _, kp := range msg.KnownPeers {
-		if kp.ID == m.self.ID || kp.ID == msg.NodeID {
+		if kp.ID == m.self.ID || kp.ID == msg.NodeID || m.isTombstonedLocked(kp.ID) {
 			continue
 		}
 		if existing, ok := m.peers[kp.ID]; ok {
@@ -547,27 +584,211 @@ func (m *Manager) HandleLeave(nodeID string) {
 	}
 }
 
-// RemoveNode manually deletes a peer from the cluster directory.
-func (m *Manager) RemoveNode(nodeID string) error {
+// RemoveNode manually deletes a peer from the cluster directory, records a tombstone,
+// and optionally fans out the deletion request to remaining active peers if broadcast is true.
+func (m *Manager) RemoveNode(nodeID string, broadcast ...bool) error {
 	m.mu.Lock()
 	if nodeID == m.self.ID {
 		m.mu.Unlock()
 		return ErrCannotRemoveSelf
 	}
 
-	if _, ok := m.peers[nodeID]; !ok {
+	peer, ok := m.peers[nodeID]
+	if !ok {
+		// Even if not currently in peers map, if it's already tombstoned, return ErrNodeNotFound
 		m.mu.Unlock()
 		return ErrNodeNotFound
 	}
 
+	deletedPeer := cloneNode(*peer)
 	delete(m.peers, nodeID)
+	if m.tombstones == nil {
+		m.tombstones = make(map[string]time.Time)
+	}
+	m.tombstones[nodeID] = time.Now()
+
 	snapshot := m.peerSnapshotLocked()
+	tombstonesSnapshot := m.tombstoneSnapshotLocked()
+
+	// Snapshot remaining peers for fan-out
+	var peersToNotify []Node
+	for _, p := range m.peers {
+		if !p.IsSelf && p.ID != m.self.ID && p.Status != StatusOffline && len(p.Addresses) > 0 {
+			peersToNotify = append(peersToNotify, cloneNode(*p))
+		}
+	}
 	m.mu.Unlock()
 
 	if snapshot != nil {
 		m.savePeers(snapshot)
 	}
+	if tombstonesSnapshot != nil {
+		m.saveTombstones(tombstonesSnapshot)
+	}
+
+	shouldBroadcast := true
+	if len(broadcast) > 0 {
+		shouldBroadcast = broadcast[0]
+	}
+
+	if shouldBroadcast {
+		// Fan out deletion concurrently with 30s timeout per peer
+		m.fanOutDelete(nodeID, peersToNotify, deletedPeer)
+	}
+
 	return nil
+}
+
+// LeaveCluster triggers self node departure from the cluster:
+// notifies known peers that this node is leaving, clears all known peers,
+// and clears the persisted nodes file to reset this node to standalone mode.
+func (m *Manager) LeaveCluster(ctx context.Context) error {
+	m.mu.Lock()
+	peersToNotify := make([]Node, 0, len(m.peers))
+	for _, p := range m.peers {
+		if !p.IsSelf && p.ID != m.self.ID && len(p.Addresses) > 0 {
+			peersToNotify = append(peersToNotify, cloneNode(*p))
+		}
+	}
+	// Clear all known peers
+	m.peers = make(map[string]*Node)
+	m.mu.Unlock()
+
+	// Best-effort notify peers that self is leaving (concurrently)
+	var cancel context.CancelFunc
+	if ctx == nil {
+		ctx, cancel = context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+	} else if _, ok := ctx.Deadline(); !ok {
+		ctx, cancel = context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+	}
+
+	leaveBody, _ := json.Marshal(map[string]string{"node_id": m.self.ID})
+	var leaveWg sync.WaitGroup
+	sem := make(chan struct{}, 10)
+
+	for _, peer := range peersToNotify {
+		leaveWg.Add(1)
+		go func(targetPeer Node) {
+			defer leaveWg.Done()
+
+			select {
+			case <-ctx.Done():
+				return
+			case sem <- struct{}{}:
+			}
+			defer func() { <-sem }()
+
+			for _, addr := range targetPeer.Addresses {
+				if ctx.Err() != nil {
+					return
+				}
+				endpoint := strings.TrimRight(addr, "/") + "/api/v1/cluster/leave"
+				reqCtx, reqCancel := context.WithTimeout(ctx, 30*time.Second)
+				req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, endpoint, bytes.NewReader(leaveBody))
+				if err == nil {
+					req.Header.Set("Content-Type", "application/json")
+					if m.clusterToken != "" {
+						req.Header.Set("X-Cluster-Token", m.clusterToken)
+					}
+					resp, postErr := m.httpClient.Do(req)
+					if postErr == nil {
+						resp.Body.Close()
+						reqCancel()
+						break
+					}
+				}
+				reqCancel()
+			}
+		}(peer)
+	}
+
+	leaveWg.Wait()
+
+	// Clear persisted peers file by saving empty list
+	m.savePeers([]Node{})
+
+	return nil
+}
+
+func (m *Manager) fanOutDelete(deletedNodeID string, peersToNotify []Node, deletedPeer Node) {
+	// Attempt to notify target deleted peer as well if it had addresses
+	allTargets := make([]Node, 0, len(peersToNotify)+1)
+	if len(deletedPeer.Addresses) > 0 {
+		allTargets = append(allTargets, deletedPeer)
+	}
+	allTargets = append(allTargets, peersToNotify...)
+
+	sem := make(chan struct{}, 10)
+	var wg sync.WaitGroup
+
+	for _, p := range allTargets {
+		wg.Add(1)
+		go func(target Node) {
+			defer wg.Done()
+			select {
+			case sem <- struct{}{}:
+			default:
+				// If concurrency limit reached, still acquire slot
+				sem <- struct{}{}
+			}
+			defer func() { <-sem }()
+
+			for _, addr := range target.Addresses {
+				endpoint := strings.TrimRight(addr, "/") + "/api/v1/nodes/" + deletedNodeID + "?broadcast=false"
+				reqCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				req, err := http.NewRequestWithContext(reqCtx, http.MethodDelete, endpoint, nil)
+				if err != nil {
+					cancel()
+					continue
+				}
+				if m.clusterToken != "" {
+					req.Header.Set("X-Cluster-Token", m.clusterToken)
+				}
+				resp, err := m.httpClient.Do(req)
+				if err != nil {
+					cancel()
+					continue
+				}
+				resp.Body.Close()
+				cancel()
+				if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNotFound {
+					break
+				}
+			}
+		}(p)
+	}
+
+	// We can let fan-out run asynchronously in background or wait with short grace period
+	// Run asynchronously so caller is never blocked if peers take up to 30s
+	_ = wg
+}
+
+func (m *Manager) tombstoneSnapshotLocked() map[string]time.Time {
+	if m.stacksDir == "" || len(m.tombstones) == 0 {
+		return nil
+	}
+	cp := make(map[string]time.Time, len(m.tombstones))
+	now := time.Now()
+	for id, ts := range m.tombstones {
+		if now.Sub(ts) < defaultTombstoneTTL {
+			cp[id] = ts
+		}
+	}
+	return cp
+}
+
+func (m *Manager) saveTombstones(snapshot map[string]time.Time) {
+	if m.stacksDir == "" || snapshot == nil {
+		return
+	}
+	m.persistMu.Lock()
+	defer m.persistMu.Unlock()
+
+	if err := SavePersistedTombstones(m.stacksDir, snapshot); err != nil {
+		slog.Warn("Cluster: failed to persist tombstones", "error", err)
+	}
 }
 
 func (m *Manager) peerSnapshotLocked() []Node {

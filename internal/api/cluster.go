@@ -137,6 +137,7 @@ func (s *Server) handleLeave(w http.ResponseWriter, r *http.Request) {
 }
 
 // handleDeleteNode handles DELETE /api/v1/nodes/{id}.
+// Query parameter ?broadcast=false suppresses fan-out to other peers.
 func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
@@ -149,7 +150,19 @@ func (s *Server) handleDeleteNode(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err := s.clusterSvc.RemoveNode(id)
+	self := s.clusterSvc.Self()
+	if id == self.ID {
+		// Trigger self leave: notify peers, clear local peers table and file
+		if err := s.clusterSvc.LeaveCluster(r.Context()); err != nil {
+			writeError(w, http.StatusInternalServerError, err.Error())
+			return
+		}
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "node left cluster"})
+		return
+	}
+
+	broadcast := r.URL.Query().Get("broadcast") != "false"
+	err := s.clusterSvc.RemoveNode(id, broadcast)
 	if err != nil {
 		if errors.Is(err, cluster.ErrCannotRemoveSelf) {
 			writeError(w, http.StatusBadRequest, err.Error())

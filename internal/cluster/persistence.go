@@ -11,12 +11,82 @@ import (
 )
 
 const (
-	nodesFilename = "nodes.json"
+	nodesFilename      = "nodes.json"
+	tombstonesFilename = "tombstones.json"
+	defaultTombstoneTTL = 7 * 24 * time.Hour
 )
 
 // NodesFilePath returns the full path to the persisted discovered nodes file.
 func NodesFilePath(stacksDir string) string {
 	return filepath.Join(stacksDir, nodeIDSubdir, nodesFilename)
+}
+
+// TombstonesFilePath returns the full path to the persisted tombstones file.
+func TombstonesFilePath(stacksDir string) string {
+	return filepath.Join(stacksDir, nodeIDSubdir, tombstonesFilename)
+}
+
+// LoadPersistedTombstones reads tombstones from $stacksDir/.dokidoki/tombstones.json.
+// Prunes entries older than defaultTombstoneTTL.
+func LoadPersistedTombstones(stacksDir string) (map[string]time.Time, error) {
+	if strings.TrimSpace(stacksDir) == "" {
+		return make(map[string]time.Time), nil
+	}
+
+	path := TombstonesFilePath(stacksDir)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return make(map[string]time.Time), nil
+		}
+		return nil, err
+	}
+
+	trimmed := strings.TrimSpace(string(data))
+	if trimmed == "" {
+		return make(map[string]time.Time), nil
+	}
+
+	var loaded map[string]time.Time
+	if err := json.Unmarshal([]byte(trimmed), &loaded); err != nil {
+		return nil, err
+	}
+
+	now := time.Now()
+	res := make(map[string]time.Time)
+	for id, ts := range loaded {
+		if now.Sub(ts) < defaultTombstoneTTL {
+			res[id] = ts
+		}
+	}
+
+	return res, nil
+}
+
+// SavePersistedTombstones saves tombstones to $stacksDir/.dokidoki/tombstones.json atomically.
+func SavePersistedTombstones(stacksDir string, tombstones map[string]time.Time) error {
+	if strings.TrimSpace(stacksDir) == "" {
+		return nil
+	}
+
+	targetDir := filepath.Join(stacksDir, nodeIDSubdir)
+	targetFile := filepath.Join(targetDir, tombstonesFilename)
+
+	if err := os.MkdirAll(targetDir, 0755); err != nil {
+		return err
+	}
+
+	data, err := json.MarshalIndent(tombstones, "", "  ")
+	if err != nil {
+		return err
+	}
+
+	tmpFile := filepath.Join(targetDir, fmt.Sprintf(".%s.tmp.%d", tombstonesFilename, time.Now().UnixNano()))
+	if err := os.WriteFile(tmpFile, append(data, '\n'), 0644); err != nil {
+		return err
+	}
+
+	return os.Rename(tmpFile, targetFile)
 }
 
 // LoadPersistedNodes reads discovered nodes from $stacksDir/.dokidoki/nodes.json.

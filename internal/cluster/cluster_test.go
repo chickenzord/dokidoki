@@ -906,3 +906,159 @@ func TestManagerConcurrentPersistence(t *testing.T) {
 		t.Fatalf("expected 20 persisted nodes, got %d", len(persisted))
 	}
 }
+
+func TestTombstonePersistenceAndFiltering(t *testing.T) {
+	tempDir := t.TempDir()
+	selfNode := Node{
+		ID:        "self-tombstone",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+	mgr := NewManager(selfNode, "", 10*time.Second, nil, tempDir)
+
+	// Register peer-1
+	_, err := mgr.HandleHandshake(HandshakeRequest{
+		NodeID:    "peer-1",
+		Name:      "Peer 1",
+		Addresses: []string{"http://10.0.0.1:8080"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove peer-1 without broadcast
+	if err := mgr.RemoveNode("peer-1", false); err != nil {
+		t.Fatalf("RemoveNode failed: %v", err)
+	}
+
+	// Verify peer-1 is no longer in manager
+	if _, ok := mgr.GetNode("peer-1"); ok {
+		t.Fatalf("expected peer-1 to be removed")
+	}
+
+	// Verify tombstone file created on disk
+	tombstones, err := LoadPersistedTombstones(tempDir)
+	if err != nil {
+		t.Fatalf("failed to load tombstones: %v", err)
+	}
+	if _, ok := tombstones["peer-1"]; !ok {
+		t.Fatalf("expected peer-1 in persisted tombstones: %+v", tombstones)
+	}
+
+	// Now simulate peer event / discovery for peer-1 (e.g. from mDNS)
+	mgr.handlePeerEvent(PeerEvent{
+		Type:      EventDiscovered,
+		NodeID:    "peer-1",
+		Name:      "Peer 1",
+		Addresses: []string{"http://10.0.0.1:8080"},
+	})
+	if _, ok := mgr.GetNode("peer-1"); ok {
+		t.Fatalf("expected peer-1 NOT to be resurrected by peer event")
+	}
+
+	// Simulate heartbeat incoming from peer-1
+	err = mgr.HandleHeartbeat(HeartbeatMessage{
+		NodeID:    "peer-1",
+		Addresses: []string{"http://10.0.0.1:8080"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mgr.GetNode("peer-1"); ok {
+		t.Fatalf("expected peer-1 NOT to be resurrected by heartbeat direct sender")
+	}
+
+	// Simulate heartbeat from peer-2 containing peer-1 in KnownPeers (PEX gossip)
+	_, err = mgr.HandleHandshake(HandshakeRequest{
+		NodeID:    "peer-2",
+		Name:      "Peer 2",
+		Addresses: []string{"http://10.0.0.2:8080"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	err = mgr.HandleHeartbeat(HeartbeatMessage{
+		NodeID:    "peer-2",
+		Addresses: []string{"http://10.0.0.2:8080"},
+		KnownPeers: []Node{
+			{ID: "peer-1", Name: "Peer 1", Addresses: []string{"http://10.0.0.1:8080"}},
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := mgr.GetNode("peer-1"); ok {
+		t.Fatalf("expected peer-1 NOT to be resurrected by PEX gossip merge")
+	}
+
+	// Test new manager instance restarts with same stacksDir:
+	// peer-1 tombstone should be loaded and peer-1 should not be accepted
+	mgr2 := NewManager(selfNode, "", 10*time.Second, nil, tempDir)
+	mgr2.handlePeerEvent(PeerEvent{
+		Type:      EventDiscovered,
+		NodeID:    "peer-1",
+		Addresses: []string{"http://10.0.0.1:8080"},
+	})
+	if _, ok := mgr2.GetNode("peer-1"); ok {
+		t.Fatalf("expected peer-1 NOT to be resurrected in newly initialized manager with loaded tombstones")
+	}
+}
+
+func TestLeaveCluster(t *testing.T) {
+	tempDir := t.TempDir()
+	selfNode := Node{
+		ID:        "self-leave",
+		Addresses: []string{"http://127.0.0.1:8080"},
+	}
+
+	leaveCalled := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/cluster/leave" {
+			leaveCalled = true
+			w.WriteHeader(http.StatusOK)
+			return
+		}
+		http.NotFound(w, r)
+	}))
+	defer server.Close()
+
+	mgr := NewManager(selfNode, "", 10*time.Second, server.Client(), tempDir)
+	_, err := mgr.HandleHandshake(HandshakeRequest{
+		NodeID:    "remote-peer",
+		Addresses: []string{server.URL},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Ensure peers saved to disk
+	persisted, err := LoadPersistedNodes(tempDir)
+	if err != nil || len(persisted) != 1 {
+		t.Fatalf("expected 1 persisted node before leave, got %d (err: %v)", len(persisted), err)
+	}
+
+	// Call LeaveCluster
+	if err := mgr.LeaveCluster(context.Background()); err != nil {
+		t.Fatalf("LeaveCluster failed: %v", err)
+	}
+
+	if !leaveCalled {
+		t.Errorf("expected leave notification to be sent to peer")
+	}
+
+	// Ensure peers in memory is only self
+	nodes := mgr.ListNodes()
+	if len(nodes) != 1 || !nodes[0].IsSelf {
+		t.Errorf("expected only self node in manager after leave, got %+v", nodes)
+	}
+
+	// Ensure persisted file cleared
+	persisted, err = LoadPersistedNodes(tempDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(persisted) != 0 {
+		t.Errorf("expected 0 persisted nodes after leave, got %d", len(persisted))
+	}
+}
+

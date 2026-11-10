@@ -1079,6 +1079,51 @@ func TestHeartbeatLogDebugLevel(t *testing.T) {
 	}
 }
 
+func TestPingLogDebugLevel(t *testing.T) {
+	var buf bytes.Buffer
+	lvlVar := &slog.LevelVar{}
+	lvlVar.Set(slog.LevelInfo)
+	logger.Setup(&buf, lvlVar, "text", false)
+	defer logger.Setup(os.Stdout, slog.LevelInfo, "text", true)
+
+	m := &mockDocker{
+		pingFn: func(ctx context.Context) (types.Ping, error) {
+			return types.Ping{APIVersion: "1.45", OSType: "linux"}, nil
+		},
+	}
+	handler, _ := setupTestServer(t, m)
+
+	// 1. With LevelInfo (default), ping request should NOT be logged
+	lvlVar.Set(slog.LevelInfo)
+	buf.Reset()
+
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/host/ping", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if strings.Contains(buf.String(), "/api/v1/host/ping") {
+		t.Errorf("ping was logged at info level: %q", buf.String())
+	}
+
+	// 2. With LevelDebug, ping request SHOULD be logged at debug level
+	lvlVar.Set(slog.LevelDebug)
+	buf.Reset()
+
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/host/ping", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", w.Code)
+	}
+	if !strings.Contains(buf.String(), "[DEBUG]") || !strings.Contains(buf.String(), "/api/v1/host/ping") {
+		t.Errorf("expected ping to be logged at debug level, got: %q", buf.String())
+	}
+}
+
 func TestCreateStack(t *testing.T) {
 	m := &mockDocker{
 		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
@@ -1954,7 +1999,21 @@ func (m *mockClusterService) HandleHeartbeat(msg cluster.HeartbeatMessage) error
 
 func (m *mockClusterService) HandleLeave(nodeID string) {}
 
-func (m *mockClusterService) RemoveNode(nodeID string) error {
+func (m *mockClusterService) Self() cluster.Node {
+	for _, n := range m.nodes {
+		if n.IsSelf {
+			return n
+		}
+	}
+	return cluster.Node{ID: "self-node", Name: "Self", IsSelf: true}
+}
+
+func (m *mockClusterService) LeaveCluster(ctx context.Context) error {
+	m.nodes = nil
+	return nil
+}
+
+func (m *mockClusterService) RemoveNode(nodeID string, broadcast ...bool) error {
 	return nil
 }
 
@@ -2056,6 +2115,124 @@ func TestHandleListNodes(t *testing.T) {
 		}
 	})
 }
+
+func TestHandleDeleteNode(t *testing.T) {
+	selfNode := cluster.Node{ID: "self-node", Name: "Self", IsSelf: true}
+	peer1 := cluster.Node{ID: "peer-1", Name: "Peer 1"}
+
+	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080}
+
+	t.Run("DeletePeerNodeSuccess", func(t *testing.T) {
+		var removedID string
+		var removedBroadcast bool
+		mockCluster := &mockClusterService{
+			nodes: []cluster.Node{selfNode, peer1},
+		}
+		// override RemoveNode logic for test
+		mockClusterWithHooks := &mockClusterHookService{
+			mockClusterService: mockCluster,
+			removeNodeFunc: func(id string, broadcast ...bool) error {
+				removedID = id
+				if len(broadcast) > 0 {
+					removedBroadcast = broadcast[0]
+				}
+				return nil
+			},
+		}
+
+		server := NewServer(cfg, &mockDocker{}, nil, mockClusterWithHooks, "")
+		handler := server.Routes()
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-1", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d (body: %s)", w.Code, w.Body.String())
+		}
+		if removedID != "peer-1" {
+			t.Errorf("expected removed ID 'peer-1', got %q", removedID)
+		}
+		if !removedBroadcast {
+			t.Errorf("expected broadcast=true by default")
+		}
+	})
+
+	t.Run("DeletePeerNodeBroadcastFalse", func(t *testing.T) {
+		var removedBroadcast bool
+		mockCluster := &mockClusterService{nodes: []cluster.Node{selfNode, peer1}}
+		mockClusterWithHooks := &mockClusterHookService{
+			mockClusterService: mockCluster,
+			removeNodeFunc: func(id string, broadcast ...bool) error {
+				if len(broadcast) > 0 {
+					removedBroadcast = broadcast[0]
+				}
+				return nil
+			},
+		}
+
+		server := NewServer(cfg, &mockDocker{}, nil, mockClusterWithHooks, "")
+		handler := server.Routes()
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-1?broadcast=false", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if removedBroadcast {
+			t.Errorf("expected broadcast=false when query param present")
+		}
+	})
+
+	t.Run("DeleteSelfNodeTriggersLeave", func(t *testing.T) {
+		leaveCalled := false
+		mockCluster := &mockClusterService{nodes: []cluster.Node{selfNode, peer1}}
+		mockClusterWithHooks := &mockClusterHookService{
+			mockClusterService: mockCluster,
+			leaveClusterFunc: func(ctx context.Context) error {
+				leaveCalled = true
+				return nil
+			},
+		}
+
+		server := NewServer(cfg, &mockDocker{}, nil, mockClusterWithHooks, "")
+		handler := server.Routes()
+
+		req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/self-node", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		if !leaveCalled {
+			t.Errorf("expected LeaveCluster to be called when deleting self node")
+		}
+	})
+}
+
+type mockClusterHookService struct {
+	*mockClusterService
+	removeNodeFunc   func(id string, broadcast ...bool) error
+	leaveClusterFunc func(ctx context.Context) error
+}
+
+func (m *mockClusterHookService) RemoveNode(id string, broadcast ...bool) error {
+	if m.removeNodeFunc != nil {
+		return m.removeNodeFunc(id, broadcast...)
+	}
+	return m.mockClusterService.RemoveNode(id, broadcast...)
+}
+
+func (m *mockClusterHookService) LeaveCluster(ctx context.Context) error {
+	if m.leaveClusterFunc != nil {
+		return m.leaveClusterFunc(ctx)
+	}
+	return m.mockClusterService.LeaveCluster(ctx)
+}
+
 
 
 
