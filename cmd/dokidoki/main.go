@@ -168,7 +168,7 @@ func main() {
 		Addr:         cfg.Addr(),
 		Handler:      router,
 		ReadTimeout:  15 * time.Second,
-		WriteTimeout: 15 * time.Second,
+		WriteTimeout: 0, // Disabled at server level to support streaming/SSE; timeouts enforced per-route via middleware
 		IdleTimeout:  60 * time.Second,
 	}
 

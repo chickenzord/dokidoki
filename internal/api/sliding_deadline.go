@@ -9,6 +9,9 @@ import (
 // for long-running streaming operations (such as compose up/down/pull).
 const DefaultStreamingIdleTimeout = 5 * time.Minute
 
+// DefaultRequestTimeout is the timeout applied to non-streaming requests.
+const DefaultRequestTimeout = 15 * time.Second
+
 // SlidingDeadlineMiddleware sets an initial write deadline and extends it
 // whenever data is written or flushed, keeping the connection alive as long
 // as there is periodic output.

@@ -90,15 +90,46 @@ func (s *Server) Routes() http.Handler {
 
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
-		// Stacks routes
-		r.Get("/stacks", s.handleListStacks)
-		r.Post("/stacks", s.handleCreateStack)
-		r.Get("/stacks/{name}", s.handleGetStack)
-		r.Put("/stacks/{name}", s.handleUpdateStack)
-		r.Get("/stacks/{name}/compose", s.handleGetStackCompose)
-		r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
-		r.Get("/stacks/{name}/files", s.handleGetStackFiles)
-		r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
+		// Non-streaming REST routes protected by timeout
+		r.Group(func(r chi.Router) {
+			r.Use(chiMiddleware.Timeout(DefaultRequestTimeout))
+
+			// Stacks routes
+			r.Get("/stacks", s.handleListStacks)
+			r.Post("/stacks", s.handleCreateStack)
+			r.Get("/stacks/{name}", s.handleGetStack)
+			r.Put("/stacks/{name}", s.handleUpdateStack)
+			r.Get("/stacks/{name}/compose", s.handleGetStackCompose)
+			r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
+			r.Get("/stacks/{name}/files", s.handleGetStackFiles)
+			r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
+
+			// Containers routes (non-streaming)
+			r.Get("/containers", s.handleListContainers)
+			r.Get("/containers/{id}", s.handleInspectContainer)
+			r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
+			r.Post("/containers/{id}/restart", s.handleRestartContainer)
+			r.Post("/containers/{id}/start", s.handleStartContainer)
+			r.Post("/containers/{id}/stop", s.handleStopContainer)
+
+			// Tasks routes (metadata)
+			r.Get("/tasks", s.handleListTasks)
+			r.Get("/tasks/{id}", s.handleGetTask)
+
+			// Host routes
+			r.Get("/host", s.handleHostInfo)
+			r.Get("/host/ping", s.handlePing)
+
+			// Cluster routes
+			r.Get("/nodes", s.handleListNodes)
+			r.Post("/nodes", s.handleAddNode)
+			r.Get("/nodes/{id}", s.handleGetNode)
+			r.Delete("/nodes/{id}", s.handleDeleteNode)
+			r.Post("/cluster/handshake", s.handleHandshake)
+			r.Post("/cluster/heartbeat", s.handleHeartbeat)
+			r.Post("/cluster/leave", s.handleLeave)
+		})
+
 		// Long-running streaming operations (compose up/down/restart/pull, container pull)
 		r.Group(func(r chi.Router) {
 			r.Use(SlidingDeadlineMiddleware(DefaultStreamingIdleTimeout))
@@ -110,33 +141,12 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/containers/{id}/pull", s.handlePullContainer)
 		})
 
-		// Containers routes
-		r.Get("/containers", s.handleListContainers)
-		r.Get("/containers/{id}", s.handleInspectContainer)
-		r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
-		r.Post("/containers/{id}/restart", s.handleRestartContainer)
-		r.Post("/containers/{id}/start", s.handleStartContainer)
-		r.Post("/containers/{id}/stop", s.handleStopContainer)
+		// Long-lived streaming log routes (SSE / plain text follow)
 		r.Get("/containers/{id}/logs", s.handleContainerLogs)
-
-		// Tasks routes
-		r.Get("/tasks", s.handleListTasks)
-		r.Get("/tasks/{id}", s.handleGetTask)
 		r.Get("/tasks/{id}/logs", s.handleTaskLogs)
 
-		// Host routes
-		r.Get("/host", s.handleHostInfo)
-		r.Get("/host/ping", s.handlePing)
-
-		// Cluster routes
-		r.Get("/nodes", s.handleListNodes)
-		r.Post("/nodes", s.handleAddNode)
-		r.Get("/nodes/{id}", s.handleGetNode)
-		r.Delete("/nodes/{id}", s.handleDeleteNode)
+		// Cluster proxy route (can proxy streaming requests to worker nodes)
 		r.HandleFunc("/nodes/{id}/proxy/*", s.handleProxyNode)
-		r.Post("/cluster/handshake", s.handleHandshake)
-		r.Post("/cluster/heartbeat", s.handleHeartbeat)
-		r.Post("/cluster/leave", s.handleLeave)
 	})
 
 	// Mount embedded Web UI handler for SPA routing with client-side fallback
