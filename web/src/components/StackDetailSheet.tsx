@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
+import { Link } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { ClusterStack, StackFilesResponse, ContainerSummary, CreateStackFile } from '../types';
 import { useStackFilesQuery, useStackContainersQuery, useStackDetailQuery } from '../hooks/useClusterData';
@@ -482,10 +483,25 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
             )}
 
             <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-              <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1">
-                <Server className="w-3 h-3 text-slate-400" />
-                {stack.hostName}
-              </Badge>
+              {stack.hostId ? (
+                <Link
+                  to="/nodes/$nodeId"
+                  params={{ nodeId: stack.hostId }}
+                  className="hover:opacity-80 transition-opacity"
+                >
+                  <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1 cursor-pointer hover:border-slate-600">
+                    <Server className="w-3 h-3 text-slate-400" />
+                    {stack.hostName}
+                  </Badge>
+                </Link>
+              ) : (
+                <Link to="/nodes" className="hover:opacity-80 transition-opacity">
+                  <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1 cursor-pointer hover:border-slate-600">
+                    <Server className="w-3 h-3 text-slate-400" />
+                    {stack.hostName}
+                  </Badge>
+                </Link>
+              )}
 
               <Badge
                 variant="outline"

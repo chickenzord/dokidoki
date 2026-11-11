@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useDeferredValue } from 'react';
+import { useRouter } from '@tanstack/react-router';
 import { ClusterContainer } from '../types';
 import { useClusterStacksQuery } from '../hooks/useClusterData';
 import { StackDetailSheet } from './StackDetailSheet';
@@ -31,6 +32,7 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
   selectedHostId,
   searchQuery: initialSearch = '',
 }) => {
+  const router = useRouter();
   const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'running'>('all');
   const [localSearch, setLocalSearch] = useState('');
@@ -261,11 +263,11 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
                   key={`${stack.hostId}-${stack.name}`}
                   role="button"
                   tabIndex={0}
-                  onClick={() => setSelectedStackKey({ hostId: stack.hostId, name: stack.name })}
+                  onClick={() => router.navigate({ to: `/nodes/${encodeURIComponent(stack.hostId)}/stacks/${encodeURIComponent(stack.name)}` })}
                   onKeyDown={(e) => {
                     if (e.key === 'Enter' || e.key === ' ') {
                       e.preventDefault();
-                      setSelectedStackKey({ hostId: stack.hostId, name: stack.name });
+                      router.navigate({ to: `/nodes/${encodeURIComponent(stack.hostId)}/stacks/${encodeURIComponent(stack.name)}` });
                     }
                   }}
                   className="group px-3.5 py-3 rounded-lg border border-slate-800/80 bg-slate-900/40 hover:bg-slate-900 hover:border-slate-700 transition-colors cursor-pointer flex items-center justify-between gap-3 shadow-sm focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-rose-500"

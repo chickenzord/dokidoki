@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { Link } from '@tanstack/react-router';
 import { useNodesQuery, useDeleteNodeMutation, useAddNodeMutation } from '../hooks/useClusterData';
 import { Badge } from './ui/badge';
 import { Server, Radio, Globe, Tag, RefreshCw, AlertCircle, Loader2, Trash2, LogOut, Plus } from 'lucide-react';
@@ -139,7 +140,13 @@ export const ClusterNodesView: React.FC = () => {
                     <td className="p-3.5 font-sans font-medium text-slate-200">
                       <div className="flex items-center gap-2">
                         <Radio className={`w-4 h-4 flex-shrink-0 ${isAlive ? 'text-emerald-400' : isSuspect ? 'text-amber-400' : 'text-slate-500'}`} />
-                        <span className="font-semibold text-slate-100">{node.name}</span>
+                        <Link
+                          to="/nodes/$nodeId"
+                          params={{ nodeId: node.id }}
+                          className="font-semibold text-slate-100 hover:text-rose-400 transition-colors"
+                        >
+                          {node.name}
+                        </Link>
                         {node.is_self && (
                           <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-300 border-slate-700 font-mono">
                             Discovery Origin

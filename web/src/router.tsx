@@ -5,12 +5,16 @@ import {
   createRouter,
   Outlet,
   redirect,
+  useParams,
 } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Navbar } from './components/Navbar';
 import { ClusterStacksView } from './components/ClusterStacksView';
 import { ClusterContainersView } from './components/ClusterContainersView';
 import { ClusterNodesView } from './components/ClusterNodesView';
+import { NodeDetailView } from './pages/NodeDetailView';
+import { NodeStackDetailRouteComponent } from './pages/NodeStackDetailRouteComponent';
+import { NodeContainerDetailRouteComponent } from './pages/NodeContainerDetailRouteComponent';
 
 export interface ClusterUIContextType {
   selectedHostId: string | null;
@@ -160,11 +164,76 @@ const nodesRoute = createRoute({
   component: ClusterNodesView,
 });
 
+// Node-scoped route 1: /nodes/$nodeId
+const nodeDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId',
+  component: NodeDetailRouteComponent,
+});
+
+function NodeDetailRouteComponent() {
+  const { nodeId } = useParams({ from: '/nodes/$nodeId' });
+  return <NodeDetailView nodeId={nodeId} />;
+}
+
+// Node-scoped route 2: /nodes/$nodeId/stacks
+const nodeStacksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId/stacks',
+  component: NodeStacksRouteComponent,
+});
+
+function NodeStacksRouteComponent() {
+  const { nodeId } = useParams({ from: '/nodes/$nodeId/stacks' });
+  const { searchQuery } = useClusterUI();
+  return (
+    <div className="space-y-4">
+      <ClusterStacksView selectedHostId={nodeId} searchQuery={searchQuery} />
+    </div>
+  );
+}
+
+// Node-scoped route 3: /nodes/$nodeId/stacks/$stackName
+const nodeStackDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId/stacks/$stackName',
+  component: NodeStackDetailRouteComponent,
+});
+
+// Node-scoped route 4: /nodes/$nodeId/containers
+const nodeContainersRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId/containers',
+  component: NodeContainersRouteComponent,
+});
+
+function NodeContainersRouteComponent() {
+  const { nodeId } = useParams({ from: '/nodes/$nodeId/containers' });
+  const { searchQuery } = useClusterUI();
+  return (
+    <div className="space-y-4">
+      <ClusterContainersView selectedHostId={nodeId} searchQuery={searchQuery} />
+    </div>
+  );
+}
+
+// Node-scoped route 5: /nodes/$nodeId/containers/$containerId
+const nodeContainerDetailRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId/containers/$containerId',
+  component: NodeContainerDetailRouteComponent,
+});
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   stacksRoute,
   containersRoute,
   nodesRoute,
+  nodeDetailRoute,
+  nodeStacksRoute,
+  nodeStackDetailRoute,
+  nodeContainersRoute,
+  nodeContainerDetailRoute,
 ]);
 
 export const router = createRouter({ routeTree });

@@ -1,4 +1,5 @@
 import React, { useState, useMemo, useDeferredValue } from 'react';
+import { useRouter } from '@tanstack/react-router';
 import { ClusterContainer } from '../types';
 import { useClusterContainersQuery } from '../hooks/useClusterData';
 import { getHostForContainer } from '../lib/utils';
@@ -31,6 +32,7 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
   selectedHostId,
   searchQuery: initialSearch = '',
 }) => {
+  const router = useRouter();
   const [stateFilter, setStateFilter] = useState<'all' | 'running' | 'exited' | 'paused'>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'standalone' | 'stack'>('all');
   const [localSearch, setLocalSearch] = useState('');
@@ -276,11 +278,11 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                     key={`${container.hostId}-${container.id}`}
                     role="button"
                     tabIndex={0}
-                    onClick={() => setSelectedContainer(container)}
+                    onClick={() => router.navigate({ to: `/nodes/${encodeURIComponent(container.hostId)}/containers/${encodeURIComponent(container.id)}` })}
                     onKeyDown={(e) => {
                       if (e.key === 'Enter' || e.key === ' ') {
                         e.preventDefault();
-                        setSelectedContainer(container);
+                        router.navigate({ to: `/nodes/${encodeURIComponent(container.hostId)}/containers/${encodeURIComponent(container.id)}` });
                       }
                     }}
                     className="hover:bg-slate-800/40 cursor-pointer transition-colors group focus-visible:outline-none focus-visible:bg-slate-800/60"
