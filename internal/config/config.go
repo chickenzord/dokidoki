@@ -31,6 +31,7 @@ type Config struct {
 	Peers            []string
 	ClusterToken     string
 	EnableMDNS       bool
+	ReadOnly         bool
 	LogLevel         string
 	LogFormat        string
 }
@@ -121,6 +122,13 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 		}
 		cfg.EnableMDNS = enableMDNS
 	}
+	if val, ok := envMap["DOKIDOKI_READ_ONLY"]; ok && strings.TrimSpace(val) != "" {
+		readOnly, err := strconv.ParseBool(strings.TrimSpace(val))
+		if err != nil {
+			return nil, fmt.Errorf("invalid DOKIDOKI_READ_ONLY %q: %w", val, err)
+		}
+		cfg.ReadOnly = readOnly
+	}
 	if val, ok := envMap["DOKIDOKI_LOG_LEVEL"]; ok && strings.TrimSpace(val) != "" {
 		cfg.LogLevel = strings.TrimSpace(val)
 	}
@@ -156,6 +164,7 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 	fs.StringVar(&peersFlag, "peers", strings.Join(cfg.Peers, ","), "Comma-separated seed peers")
 	fs.StringVar(&cfg.ClusterToken, "cluster-token", cfg.ClusterToken, "Cluster security authentication token")
 	fs.BoolVar(&cfg.EnableMDNS, "enable-mdns", cfg.EnableMDNS, "Enable LAN mDNS discovery")
+	fs.BoolVar(&cfg.ReadOnly, "read-only", cfg.ReadOnly, "Enable read-only mode to prevent state changes")
 	fs.StringVar(&cfg.LogLevel, "log-level", cfg.LogLevel, "Logging verbosity level (debug, info, warn, error)")
 	fs.StringVar(&cfg.LogFormat, "log-format", cfg.LogFormat, "Log output format (text, json)")
 	fs.BoolVar(&verboseFlag, "verbose", false, "Enable verbose/debug logging")

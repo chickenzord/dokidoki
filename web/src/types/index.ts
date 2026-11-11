@@ -7,6 +7,7 @@ export interface Node {
   status: NodeStatus;
   version: string;
   is_self: boolean;
+  read_only?: boolean;
   last_seen?: string;
 }
 
@@ -62,6 +63,7 @@ export interface ClusterStack extends StackSummary {
   hostName: string;
   hostEndpoint: string;
   hostAddress?: string;
+  hostReadOnly?: boolean;
   pending_import?: boolean;
 }
 
@@ -70,6 +72,7 @@ export interface ClusterContainer extends ContainerSummary {
   hostName: string;
   hostEndpoint: string;
   hostAddress?: string;
+  hostReadOnly?: boolean;
 }
 
 export interface StackFile {
@@ -119,6 +122,7 @@ export interface HostInfo {
   arch: string;
   dokidokiVersion: string;
   stacksDir: string;
+  read_only?: boolean;
   docker: DockerHostInfo;
 }
 

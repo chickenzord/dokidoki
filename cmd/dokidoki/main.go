@@ -98,6 +98,7 @@ func main() {
 		{Key: "Docker Compose Bin", Value: cfg.DockerComposeBin},
 		{Key: "Cluster Token", Value: cfg.ClusterToken, Sensitive: true},
 		{Key: "mDNS Status", Value: mDNSVal},
+		{Key: "Read Only", Value: cfg.ReadOnly},
 		{Key: "Advertised Addrs", Value: strings.Join(candidateAddrs, ", ")},
 		{Key: "Seed Peers", Value: seedPeersVal},
 		{Key: "Log Level", Value: logLevel.String()},
@@ -133,6 +134,7 @@ func main() {
 		Status:    cluster.StatusAlive,
 		Version:   version,
 		IsSelf:    true,
+		ReadOnly:  cfg.ReadOnly,
 	}
 
 	clusterManager := cluster.NewManager(self, cfg.ClusterToken, 30*time.Second, nil, cfg.StacksDir)

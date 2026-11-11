@@ -72,6 +72,18 @@ func NewRouter(cfg *config.Config, dockerCli docker.Client, stackSvc StackServic
 	return s.Routes()
 }
 
+// readOnlyMiddleware returns an HTTP middleware that rejects mutating requests with 403 Forbidden
+// when the node is configured in read-only mode.
+func (s *Server) readOnlyMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.cfg != nil && s.cfg.ReadOnly {
+			writeError(w, http.StatusForbidden, "node is in read-only mode")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // Routes returns the configured http.Handler with all middleware and routes.
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -94,23 +106,18 @@ func (s *Server) Routes() http.Handler {
 		r.Group(func(r chi.Router) {
 			r.Use(chiMiddleware.Timeout(DefaultRequestTimeout))
 
-			// Stacks routes
+			// Read-only queries (Stacks)
 			r.Get("/stacks", s.handleListStacks)
-			r.Post("/stacks", s.handleCreateStack)
 			r.Get("/stacks/{name}", s.handleGetStack)
-			r.Put("/stacks/{name}", s.handleUpdateStack)
 			r.Get("/stacks/{name}/compose", s.handleGetStackCompose)
 			r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
 			r.Get("/stacks/{name}/files", s.handleGetStackFiles)
 			r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
 
-			// Containers routes (non-streaming)
+			// Read-only queries (Containers)
 			r.Get("/containers", s.handleListContainers)
 			r.Get("/containers/{id}", s.handleInspectContainer)
 			r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
-			r.Post("/containers/{id}/restart", s.handleRestartContainer)
-			r.Post("/containers/{id}/start", s.handleStartContainer)
-			r.Post("/containers/{id}/stop", s.handleStopContainer)
 
 			// Tasks routes (metadata)
 			r.Get("/tasks", s.handleListTasks)
@@ -120,7 +127,7 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/host", s.handleHostInfo)
 			r.Get("/host/ping", s.handlePing)
 
-			// Cluster routes
+			// Cluster discovery & membership routes (must remain accessible in read-only mode)
 			r.Get("/nodes", s.handleListNodes)
 			r.Post("/nodes", s.handleAddNode)
 			r.Get("/nodes/{id}", s.handleGetNode)
@@ -128,11 +135,23 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/cluster/handshake", s.handleHandshake)
 			r.Post("/cluster/heartbeat", s.handleHeartbeat)
 			r.Post("/cluster/leave", s.handleLeave)
+
+			// Mutating REST operations guarded by read-only mode
+			r.Group(func(r chi.Router) {
+				r.Use(s.readOnlyMiddleware)
+
+				r.Post("/stacks", s.handleCreateStack)
+				r.Put("/stacks/{name}", s.handleUpdateStack)
+				r.Post("/containers/{id}/restart", s.handleRestartContainer)
+				r.Post("/containers/{id}/start", s.handleStartContainer)
+				r.Post("/containers/{id}/stop", s.handleStopContainer)
+			})
 		})
 
 		// Long-running streaming operations (compose up/down/restart/pull, container pull)
 		r.Group(func(r chi.Router) {
 			r.Use(SlidingDeadlineMiddleware(DefaultStreamingIdleTimeout))
+			r.Use(s.readOnlyMiddleware)
 
 			r.Post("/stacks/{name}/up", s.handleComposeUp)
 			r.Post("/stacks/{name}/down", s.handleComposeDown)

@@ -439,6 +439,7 @@ func (m *Manager) AddPeer(ctx context.Context, address string) (*Node, error) {
 		Name:         m.self.Name,
 		Addresses:    m.self.Addresses,
 		Version:      m.self.Version,
+		ReadOnly:     m.self.ReadOnly,
 		ClusterToken: m.clusterToken,
 	}
 
@@ -500,6 +501,7 @@ func (m *Manager) AddPeer(ctx context.Context, address string) (*Node, error) {
 		peer.Name = hsResp.Name
 		peer.Addresses = append([]string(nil), addrs...)
 		peer.Version = hsResp.Version
+		peer.ReadOnly = hsResp.ReadOnly
 		targetNode = peer
 	} else {
 		targetNode = &Node{
@@ -508,6 +510,7 @@ func (m *Manager) AddPeer(ctx context.Context, address string) (*Node, error) {
 			Addresses: append([]string(nil), addrs...),
 			Status:    StatusAlive,
 			Version:   hsResp.Version,
+			ReadOnly:  hsResp.ReadOnly,
 			IsSelf:    false,
 			LastSeen:  time.Now(),
 		}
@@ -575,6 +578,7 @@ func (m *Manager) HandleHandshake(req HandshakeRequest) (*HandshakeResponse, err
 			peer.Name = req.Name
 			peer.Addresses = reqAddrs
 			peer.Version = req.Version
+			peer.ReadOnly = req.ReadOnly
 		} else {
 			m.peers[req.NodeID] = &Node{
 				ID:        req.NodeID,
@@ -582,6 +586,7 @@ func (m *Manager) HandleHandshake(req HandshakeRequest) (*HandshakeResponse, err
 				Addresses: reqAddrs,
 				Status:    StatusAlive,
 				Version:   req.Version,
+				ReadOnly:  req.ReadOnly,
 				IsSelf:    false,
 				LastSeen:  time.Now(),
 			}
@@ -602,6 +607,7 @@ func (m *Manager) HandleHandshake(req HandshakeRequest) (*HandshakeResponse, err
 		Name:      m.self.Name,
 		Addresses: append([]string(nil), m.self.Addresses...),
 		Version:   m.self.Version,
+		ReadOnly:  m.self.ReadOnly,
 		Peers:     knownPeers,
 	}
 	m.mu.Unlock()
@@ -652,11 +658,16 @@ func (m *Manager) HandleHeartbeat(msg HeartbeatMessage) error {
 			peer.Addresses = addrs
 			changed = true
 		}
+		if peer.ReadOnly != msg.ReadOnly {
+			peer.ReadOnly = msg.ReadOnly
+			changed = true
+		}
 	} else {
 		m.peers[msg.NodeID] = &Node{
 			ID:        msg.NodeID,
 			Addresses: addrs,
 			Status:    StatusAlive,
+			ReadOnly:  msg.ReadOnly,
 			LastSeen:  time.Now(),
 		}
 		changed = true
@@ -670,6 +681,10 @@ func (m *Manager) HandleHeartbeat(msg HeartbeatMessage) error {
 		if existing, ok := m.peers[kp.ID]; ok {
 			if len(existing.Addresses) == 0 && len(kp.Addresses) > 0 {
 				existing.Addresses = append([]string(nil), kp.Addresses...)
+				changed = true
+			}
+			if existing.ReadOnly != kp.ReadOnly {
+				existing.ReadOnly = kp.ReadOnly
 				changed = true
 			}
 		} else {

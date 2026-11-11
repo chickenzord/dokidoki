@@ -44,6 +44,9 @@ func TestDefaultConfig(t *testing.T) {
 	if !cfg.EnableMDNS {
 		t.Errorf("expected EnableMDNS true, got false")
 	}
+	if cfg.ReadOnly {
+		t.Errorf("expected ReadOnly false, got true")
+	}
 	if cfg.LogLevel != "info" {
 		t.Errorf("expected LogLevel info, got %s", cfg.LogLevel)
 	}
@@ -68,6 +71,7 @@ func TestEnvOverride(t *testing.T) {
 		"DOKIDOKI_PEERS=http://192.168.1.50:8080,http://192.168.1.51:8080",
 		"DOKIDOKI_CLUSTER_TOKEN=secret-cluster-token",
 		"DOKIDOKI_ENABLE_MDNS=false",
+		"DOKIDOKI_READ_ONLY=true",
 		"DOKIDOKI_LOG_LEVEL=debug",
 	}
 
@@ -111,6 +115,9 @@ func TestEnvOverride(t *testing.T) {
 	if cfg.EnableMDNS != false {
 		t.Errorf("expected EnableMDNS false, got true")
 	}
+	if !cfg.ReadOnly {
+		t.Errorf("expected ReadOnly true, got false")
+	}
 	if cfg.LogLevel != "debug" {
 		t.Errorf("expected LogLevel debug, got %s", cfg.LogLevel)
 	}
@@ -144,6 +151,7 @@ func TestFlagsOverrideEnv(t *testing.T) {
 		"-peers=http://flag-peer-1:8080, http://flag-peer-2:8080",
 		"-cluster-token=flag-token",
 		"-enable-mdns=true",
+		"-read-only=true",
 		"-log-level=warn",
 	}
 
@@ -186,6 +194,9 @@ func TestFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.EnableMDNS != true {
 		t.Errorf("expected EnableMDNS true, got false")
+	}
+	if !cfg.ReadOnly {
+		t.Errorf("expected ReadOnly true, got false")
 	}
 	if cfg.LogLevel != "warn" {
 		t.Errorf("expected LogLevel warn, got %s", cfg.LogLevel)
@@ -278,4 +289,44 @@ func TestInvalidEnableMDNS(t *testing.T) {
 		t.Fatal("expected error for invalid DOKIDOKI_ENABLE_MDNS in env, got nil")
 	}
 }
+
+func TestReadOnlyEnvAndFlags(t *testing.T) {
+	// 1. Env: 1 / 0 / true / false
+	cases := []struct {
+		envVal   string
+		expected bool
+	}{
+		{"true", true},
+		{"1", true},
+		{"TRUE", true},
+		{"false", false},
+		{"0", false},
+	}
+
+	for _, tc := range cases {
+		cfg, err := LoadFrom(nil, []string{"DOKIDOKI_READ_ONLY=" + tc.envVal})
+		if err != nil {
+			t.Fatalf("unexpected error for %q: %v", tc.envVal, err)
+		}
+		if cfg.ReadOnly != tc.expected {
+			t.Errorf("expected ReadOnly %v for env %q, got %v", tc.expected, tc.envVal, cfg.ReadOnly)
+		}
+	}
+
+	// 2. Invalid env
+	_, err := LoadFrom(nil, []string{"DOKIDOKI_READ_ONLY=invalid"})
+	if err == nil {
+		t.Fatal("expected error for invalid DOKIDOKI_READ_ONLY, got nil")
+	}
+
+	// 3. CLI flag --read-only
+	cfg, err := LoadFrom([]string{"--read-only"}, nil)
+	if err != nil {
+		t.Fatalf("unexpected error with --read-only: %v", err)
+	}
+	if !cfg.ReadOnly {
+		t.Errorf("expected ReadOnly true with --read-only flag")
+	}
+}
+
 

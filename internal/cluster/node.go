@@ -19,6 +19,7 @@ type Node struct {
 	Status    Status    `json:"status"`
 	Version   string    `json:"version"`
 	IsSelf    bool      `json:"is_self"`
+	ReadOnly  bool      `json:"read_only"`
 	LastSeen  time.Time `json:"last_seen,omitempty"`
 }
 
@@ -28,6 +29,7 @@ type HandshakeRequest struct {
 	Name         string   `json:"name"`
 	Addresses    []string `json:"addresses"`
 	Version      string   `json:"version"`
+	ReadOnly     bool     `json:"read_only"`
 	ClusterToken string   `json:"cluster_token,omitempty"`
 }
 
@@ -37,6 +39,7 @@ type HandshakeResponse struct {
 	Name      string   `json:"name"`
 	Addresses []string `json:"addresses"`
 	Version   string   `json:"version"`
+	ReadOnly  bool     `json:"read_only"`
 	Peers     []Node   `json:"peers"`
 }
 
@@ -44,6 +47,7 @@ type HandshakeResponse struct {
 type HeartbeatMessage struct {
 	NodeID       string   `json:"node_id"`
 	Addresses    []string `json:"addresses"`
+	ReadOnly     bool     `json:"read_only"`
 	ClusterToken string   `json:"cluster_token,omitempty"`
 	KnownPeers   []Node   `json:"known_peers"`
 }

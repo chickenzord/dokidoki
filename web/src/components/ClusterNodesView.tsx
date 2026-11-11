@@ -152,6 +152,11 @@ export const ClusterNodesView: React.FC = () => {
                             Discovery Origin
                           </Badge>
                         )}
+                        {node.read_only && (
+                          <Badge variant="outline" className="text-[10px] bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono">
+                            Read-Only
+                          </Badge>
+                        )}
                       </div>
                     </td>
 

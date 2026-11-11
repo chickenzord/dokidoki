@@ -159,6 +159,11 @@ export const Navbar: React.FC<NavbarProps> = ({
                               Origin
                             </Badge>
                           )}
+                          {node.read_only && (
+                            <Badge variant="outline" className="text-[9px] px-1 py-0 bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono">
+                              RO
+                            </Badge>
+                          )}
                         </div>
                         <div className="text-[10px] text-slate-500 font-mono truncate">
                           {node.addresses?.[0] || 'direct socket'}

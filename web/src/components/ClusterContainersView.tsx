@@ -414,7 +414,7 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                         <Terminal className="w-3 h-3 mr-1" />
                         Logs
                       </Button>
-                      {isStandalone && (
+                      {isStandalone && !container.hostReadOnly && (
                         <Button
                           size="sm"
                           variant="ghost"

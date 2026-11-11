@@ -164,6 +164,7 @@ func (p *MDNSProvider) handleDiscoveredEntry(entry *zeroconf.ServiceEntry, event
 			Name:         p.self.Name,
 			Addresses:    p.self.Addresses,
 			Version:      p.self.Version,
+			ReadOnly:     p.self.ReadOnly,
 			ClusterToken: p.clusterToken,
 		}
 

@@ -44,6 +44,7 @@ export const NodeContainerDetailRouteComponent: React.FC = () => {
         hostName: node?.name || nodeId,
         hostEndpoint: endpoint,
         hostAddress: node?.addresses?.[0],
+        hostReadOnly: node?.read_only,
         stack: inspectData.stack_name || inspectData.Config?.Labels?.['com.docker.compose.project'],
         service: inspectData.Config?.Labels?.['com.docker.compose.service'],
         exit_code: inspectData.State?.ExitCode,

@@ -2467,6 +2467,180 @@ func TestTasksAPI(t *testing.T) {
 	})
 }
 
+func TestReadOnlyEnforcement(t *testing.T) {
+	m := &mockDocker{
+		listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+			return sampleContainers(), nil
+		},
+		inspectContainerFn: func(ctx context.Context, id string) (types.ContainerJSON, error) {
+			return types.ContainerJSON{
+				ContainerJSONBase: &types.ContainerJSONBase{
+					ID:   id,
+					Name: "/test-container",
+					State: &types.ContainerState{
+						Status:  "running",
+						Running: true,
+					},
+				},
+				Config: &container.Config{
+					Image: "nginx:latest",
+				},
+			}, nil
+		},
+	}
+
+	tempDir := t.TempDir()
+	managedDir := filepath.Join(tempDir, "web-stack")
+	if err := os.MkdirAll(managedDir, 0755); err != nil {
+		t.Fatalf("failed to create stack dir: %v", err)
+	}
+	composeContent := "services:\n  web:\n    image: nginx:latest\n"
+	if err := os.WriteFile(filepath.Join(managedDir, "compose.yaml"), []byte(composeContent), 0644); err != nil {
+		t.Fatalf("failed to write compose.yaml: %v", err)
+	}
+
+	cfg := &config.Config{
+		Bind:      "127.0.0.1",
+		Port:      8080,
+		StacksDir: tempDir,
+		ReadOnly:  true,
+	}
+
+	scanner := stack.NewScanner(tempDir)
+	stackSvc := stack.NewService(scanner, m, "")
+	mockCluster := &mockClusterService{
+		nodes: []cluster.Node{
+			{ID: "self-node", Name: "Self", IsSelf: true, ReadOnly: true},
+			{ID: "peer-remote", Name: "Remote", Addresses: []string{"http://remote-peer:8080"}},
+		},
+	}
+	server := NewServer(cfg, m, stackSvc, mockCluster, "")
+	handler := server.Routes()
+
+	// 1. Host Info reflects read_only: true
+	t.Run("HostInfo_ReadOnlyTrue", func(t *testing.T) {
+		req := httptest.NewRequest(http.MethodGet, "/api/v1/host", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200, got %d", w.Code)
+		}
+		var info HostInfo
+		if err := json.Unmarshal(w.Body.Bytes(), &info); err != nil {
+			t.Fatalf("failed to decode host info: %v", err)
+		}
+		if !info.ReadOnly {
+			t.Fatalf("expected HostInfo.ReadOnly=true, got false")
+		}
+	})
+
+	// 2. Read queries continue to work
+	t.Run("ReadQueries_Allowed", func(t *testing.T) {
+		readEndpoints := []string{
+			"/api/v1/stacks",
+			"/api/v1/stacks/web-stack",
+			"/api/v1/stacks/web-stack/compose",
+			"/api/v1/stacks/web-stack/containers",
+			"/api/v1/stacks/web-stack/files",
+			"/api/v1/containers",
+			"/api/v1/containers/cid-1",
+			"/api/v1/containers/cid-1/compose",
+			"/api/v1/nodes",
+			"/api/v1/nodes/self-node",
+			"/api/v1/host/ping",
+		}
+
+		for _, ep := range readEndpoints {
+			req := httptest.NewRequest(http.MethodGet, ep, nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Errorf("expected 200 for %s, got %d: %s", ep, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	// 3. Mutating local operations are blocked with 403 Forbidden
+	t.Run("Mutations_BlockedWith403", func(t *testing.T) {
+		mutations := []struct {
+			method string
+			path   string
+			body   string
+		}{
+			{http.MethodPost, "/api/v1/stacks", `{"name":"new-stack","files":[]}`},
+			{http.MethodPut, "/api/v1/stacks/web-stack", `{"files":[]}`},
+			{http.MethodPost, "/api/v1/containers/cid-1/restart", ""},
+			{http.MethodPost, "/api/v1/containers/cid-1/start", ""},
+			{http.MethodPost, "/api/v1/containers/cid-1/stop", ""},
+			{http.MethodPost, "/api/v1/containers/cid-1/pull", ""},
+			{http.MethodPost, "/api/v1/stacks/web-stack/up", ""},
+			{http.MethodPost, "/api/v1/stacks/web-stack/down", ""},
+			{http.MethodPost, "/api/v1/stacks/web-stack/restart", ""},
+			{http.MethodPost, "/api/v1/stacks/web-stack/pull", ""},
+		}
+
+		for _, tc := range mutations {
+			var bodyReader io.Reader
+			if tc.body != "" {
+				bodyReader = strings.NewReader(tc.body)
+			}
+			req := httptest.NewRequest(tc.method, tc.path, bodyReader)
+			if tc.body != "" {
+				req.Header.Set("Content-Type", "application/json")
+			}
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusForbidden {
+				t.Errorf("expected 403 Forbidden for %s %s, got %d: %s", tc.method, tc.path, w.Code, w.Body.String())
+			}
+			var resp map[string]string
+			if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+				t.Errorf("failed to parse JSON response: %v", err)
+			} else if resp["error"] != "node is in read-only mode" {
+				t.Errorf("unexpected error message: %q", resp["error"])
+			}
+		}
+	})
+
+	// 4. Proxy requests to remote nodes are NOT blocked by local read-only mode
+	t.Run("ProxyToRemote_NotBlockedByLocalReadOnly", func(t *testing.T) {
+		// Mock remote server that returns 200 OK
+		remoteCalled := false
+		remoteServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			remoteCalled = true
+			if r.Method == http.MethodPost && r.URL.Path == "/api/v1/containers/cid-99/restart" {
+				w.WriteHeader(http.StatusOK)
+				_, _ = w.Write([]byte(`{"status":"restarted"}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+		}))
+		defer remoteServer.Close()
+
+		remoteCluster := &mockClusterService{
+			nodes: []cluster.Node{
+				{ID: "self-node", Name: "Self", IsSelf: true, ReadOnly: true},
+				{ID: "peer-remote", Name: "Remote", Addresses: []string{remoteServer.URL}},
+			},
+		}
+		proxyServer := NewServer(cfg, m, stackSvc, remoteCluster, "")
+		proxyHandler := proxyServer.Routes()
+
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes/peer-remote/proxy/api/v1/containers/cid-99/restart", nil)
+		w := httptest.NewRecorder()
+		proxyHandler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("expected 200 from proxied request, got %d: %s", w.Code, w.Body.String())
+		}
+		if !remoteCalled {
+			t.Fatalf("expected remote server to be invoked")
+		}
+	})
+}
+
 
 
 

@@ -121,6 +121,7 @@ func (p *PEXProvider) sendHeartbeats(events chan<- PeerEvent) {
 	msg := HeartbeatMessage{
 		NodeID:       p.self.ID,
 		Addresses:    append([]string(nil), p.self.Addresses...),
+		ReadOnly:     p.self.ReadOnly,
 		ClusterToken: p.clusterToken,
 		KnownPeers:   knownPeers,
 	}

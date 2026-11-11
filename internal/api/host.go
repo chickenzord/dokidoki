@@ -16,6 +16,7 @@ type HostInfo struct {
 	Arch            string          `json:"arch"`
 	DokidokiVersion string          `json:"dokidokiVersion"`
 	StacksDir       string          `json:"stacksDir"`
+	ReadOnly        bool            `json:"read_only"`
 	Docker          docker.HostInfo `json:"docker"`
 }
 
@@ -30,12 +31,17 @@ func (s *Server) handleHostInfo(w http.ResponseWriter, r *http.Request) {
 	} else {
 		hostname, _ = os.Hostname()
 	}
+	readOnly := false
+	if s.cfg != nil {
+		readOnly = s.cfg.ReadOnly
+	}
 	hostInfo := HostInfo{
 		Hostname:        hostname,
 		OS:              runtime.GOOS,
 		Arch:            runtime.GOARCH,
 		DokidokiVersion: "0.1.0",
 		StacksDir:       s.stacksDir,
+		ReadOnly:        readOnly,
 		Docker:          docker.HostInfo{},
 	}
 

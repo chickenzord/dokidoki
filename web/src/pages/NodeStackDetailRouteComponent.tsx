@@ -29,6 +29,7 @@ export const NodeStackDetailRouteComponent: React.FC = () => {
         hostName: node?.name || nodeId,
         hostEndpoint: endpoint,
         hostAddress: node?.addresses?.[0],
+        hostReadOnly: node?.read_only,
       }
     : null;
 

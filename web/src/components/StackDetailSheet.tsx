@@ -95,6 +95,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
     : null;
 
   const isExternal = stack?.source === 'external';
+  const isReadOnly = Boolean(stack?.hostReadOnly);
 
   // For managed stacks: fetch files on mount
   const { data: managedFilesData, isLoading: isLoadingManagedFiles } = useStackFilesQuery(
@@ -462,8 +463,19 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
               </div>
             )}
 
+            {/* Read-Only Node Alert Banner */}
+            {isReadOnly && (
+              <div className="mt-3 p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs flex items-center gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                <div className="leading-relaxed">
+                  <span className="font-semibold text-amber-200">Read-Only Node: </span>
+                  This node is configured in read-only mode. All mutation operations (Up, Restart, Pull, Down, Edit) are disabled.
+                </div>
+              </div>
+            )}
+
             {/* Unmanaged Stack Informational Banner */}
-            {isExternal && (
+            {isExternal && !isReadOnly && (
               <div className="mt-3 p-3 bg-slate-800/40 border border-slate-700/60 rounded-lg text-slate-300 text-xs flex items-center justify-between gap-3">
                 <div className="flex items-center gap-2 text-slate-400 min-w-0">
                   <AlertCircle className="w-4 h-4 text-slate-400 flex-shrink-0" />
@@ -479,6 +491,15 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                   <Download className="w-3 h-3 mr-1" />
                   Import
                 </Button>
+              </div>
+            )}
+
+            {isExternal && isReadOnly && (
+              <div className="mt-3 p-3 bg-slate-800/40 border border-slate-700/60 rounded-lg text-slate-300 text-xs flex items-center gap-2 text-slate-400">
+                <AlertCircle className="w-4 h-4 text-slate-400 flex-shrink-0" />
+                <span>
+                  Unmanaged stack on a read-only node. Importing is disabled.
+                </span>
               </div>
             )}
 
@@ -518,6 +539,12 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 </Badge>
               )}
 
+              {isReadOnly && (
+                <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
+                  Read-Only
+                </Badge>
+              )}
+
               {stack.composePath && (
                 <>
                   <span className="text-slate-600">•</span>
@@ -534,9 +561,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={handleComposeUp}
-                disabled={isExternal}
+                disabled={isExternal || isReadOnly}
                 className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
+                title={isReadOnly ? 'Node is in read-only mode' : isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <Play className="w-3.5 h-3.5 mr-1.5 text-emerald-400" />
                 Up
@@ -546,9 +573,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={() => handleComposeRestart()}
-                disabled={isExternal}
+                disabled={isExternal || isReadOnly}
                 className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
+                title={isReadOnly ? 'Node is in read-only mode' : isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
                 Restart
@@ -558,9 +585,9 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={handleComposePull}
-                disabled={isExternal}
+                disabled={isExternal || isReadOnly}
                 className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
+                title={isReadOnly ? 'Node is in read-only mode' : isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
                 Pull
@@ -570,15 +597,15 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={handleComposeDown}
-                disabled={isExternal}
+                disabled={isExternal || isReadOnly}
                 className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
-                title={isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
+                title={isReadOnly ? 'Node is in read-only mode' : isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
                 <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
                 Down
               </Button>
 
-              {!isExternal && (
+              {!isExternal && !isReadOnly && (
                 <Button
                   size="sm"
                   variant="outline"
@@ -707,7 +734,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                               </div>
                             )}
 
-                            {container.service && !isExternal && (
+                            {container.service && !isExternal && !isReadOnly && (
                               <Button
                                 size="icon"
                                 variant="ghost"

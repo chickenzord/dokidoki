@@ -109,6 +109,7 @@ func (p *StaticProvider) probe(baseURL string, events chan<- PeerEvent) {
 		Name:         p.self.Name,
 		Addresses:    p.self.Addresses,
 		Version:      p.self.Version,
+		ReadOnly:     p.self.ReadOnly,
 		ClusterToken: p.clusterToken,
 	}
 

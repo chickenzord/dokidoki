@@ -1213,4 +1213,64 @@ func TestAddPeer(t *testing.T) {
 	})
 }
 
+func TestReadOnlyPropagation(t *testing.T) {
+	selfNode := Node{
+		ID:       "self-ro",
+		Name:     "Self Node",
+		ReadOnly: true,
+	}
+
+	mgr := NewManager(selfNode, "tok", 30*time.Second, nil, "")
+
+	// 1. Handshake response includes ReadOnly
+	hsReq := HandshakeRequest{
+		NodeID:       "peer-ro-1",
+		Name:         "Peer 1",
+		Addresses:    []string{"http://10.0.0.2:8080"},
+		ReadOnly:     true,
+		ClusterToken: "tok",
+	}
+
+	resp, err := mgr.HandleHandshake(hsReq)
+	if err != nil {
+		t.Fatalf("HandleHandshake failed: %v", err)
+	}
+	if !resp.ReadOnly {
+		t.Errorf("expected handshake response to have ReadOnly=true from self")
+	}
+
+	p1, ok := mgr.GetNode("peer-ro-1")
+	if !ok || !p1.ReadOnly {
+		t.Fatalf("expected peer-ro-1 to be registered with ReadOnly=true, got %+v", p1)
+	}
+
+	// 2. Heartbeat updates ReadOnly state
+	err = mgr.HandleHeartbeat(HeartbeatMessage{
+		NodeID:       "peer-ro-1",
+		Addresses:    []string{"http://10.0.0.2:8080"},
+		ReadOnly:     false,
+		ClusterToken: "tok",
+		KnownPeers: []Node{
+			{
+				ID:       "peer-ro-2",
+				Name:     "Peer 2",
+				ReadOnly: true,
+			},
+		},
+	})
+	if err != nil {
+		t.Fatalf("HandleHeartbeat failed: %v", err)
+	}
+
+	p1Updated, ok := mgr.GetNode("peer-ro-1")
+	if !ok || p1Updated.ReadOnly {
+		t.Fatalf("expected peer-ro-1 to have ReadOnly=false after heartbeat update, got %+v", p1Updated)
+	}
+
+	p2, ok := mgr.GetNode("peer-ro-2")
+	if !ok || !p2.ReadOnly {
+		t.Fatalf("expected peer-ro-2 learned via heartbeat to have ReadOnly=true, got %+v", p2)
+	}
+}
+
 

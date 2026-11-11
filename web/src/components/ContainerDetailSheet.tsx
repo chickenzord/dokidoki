@@ -66,6 +66,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
 
   const hostEndpoint = container?.hostEndpoint || '';
   const containerId = container?.id || '';
+  const isReadOnly = Boolean(container?.hostReadOnly);
 
   const { data: inspectData, isLoading: isLoadingInspect } = useContainerInspectQuery(
     hostEndpoint,
@@ -212,15 +213,17 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                   Logs
                 </Button>
                 {isStandalone ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={() => setGenerateDialogOpen(true)}
-                    className="h-7 text-xs bg-amber-600/10 hover:bg-amber-600 text-amber-400 hover:text-white border-amber-500/30 transition-colors"
-                  >
-                    <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                    Manage as Stack
-                  </Button>
+                  !isReadOnly && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setGenerateDialogOpen(true)}
+                      className="h-7 text-xs bg-amber-600/10 hover:bg-amber-600 text-amber-400 hover:text-white border-amber-500/30 transition-colors"
+                    >
+                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                      Manage as Stack
+                    </Button>
+                  )
                 ) : (
                   <Badge variant="outline" className="text-xs bg-blue-950/40 text-blue-400 border-blue-800/60 font-mono flex items-center gap-1">
                     <Layers className="w-3 h-3" />
@@ -271,6 +274,12 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                 </Badge>
               )}
 
+              {isReadOnly && (
+                <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
+                  Read-Only
+                </Badge>
+              )}
+
               <span className="text-slate-600">•</span>
 
               <span className="font-mono text-slate-400 text-[11px] truncate max-w-xs" title={container.id}>
@@ -278,65 +287,78 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               </span>
             </div>
 
-            <div className="flex flex-wrap items-center gap-2 pt-3">
-              {isRunning ? (
+            {/* Read-Only Node Alert Banner */}
+            {isReadOnly && (
+              <div className="mt-3 p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs flex items-center gap-2.5">
+                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+                <div className="leading-relaxed">
+                  <span className="font-semibold text-amber-200">Read-Only Node: </span>
+                  This node is configured in read-only mode. All mutation actions (Start, Stop, Restart, Pull Image) are disabled.
+                </div>
+              </div>
+            )}
+
+            {!isReadOnly && (
+              <div className="flex flex-wrap items-center gap-2 pt-3">
+                {isRunning ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={Boolean(actionLoading)}
+                    onClick={() => handleStop()}
+                    className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+                  >
+                    {actionLoading === 'stop' ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
+                    )}
+                    Stop
+                  </Button>
+                ) : (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={Boolean(actionLoading)}
+                    onClick={handleStart}
+                    className="h-8 text-xs bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 border-emerald-800/60 transition-colors"
+                  >
+                    {actionLoading === 'start' ? (
+                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+                    ) : (
+                      <Play className="w-3.5 h-3.5 mr-1.5" />
+                    )}
+                    Start
+                  </Button>
+                )}
+
                 <Button
                   size="sm"
                   variant="outline"
                   disabled={Boolean(actionLoading)}
-                  onClick={() => handleStop()}
+                  onClick={() => handleRestart()}
                   className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
                 >
-                  {actionLoading === 'stop' ? (
+                  {actionLoading === 'restart' ? (
                     <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
                   ) : (
-                    <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
+                    <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
                   )}
-                  Stop
+                  Restart
                 </Button>
-              ) : (
+
                 <Button
                   size="sm"
                   variant="outline"
                   disabled={Boolean(actionLoading)}
-                  onClick={handleStart}
-                  className="h-8 text-xs bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 border-emerald-800/60 transition-colors"
+                  onClick={handlePull}
+                  className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
                 >
-                  {actionLoading === 'start' ? (
-                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <Play className="w-3.5 h-3.5 mr-1.5" />
-                  )}
-                  Start
+                  <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+                  Pull Image
                 </Button>
-              )}
-
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={Boolean(actionLoading)}
-                onClick={() => handleRestart()}
-                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
-              >
-                {actionLoading === 'restart' ? (
-                  <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                ) : (
-                  <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
-                )}
-                Restart
-              </Button>
-
-              <Button
-                size="sm"
-                variant="outline"
-                disabled={Boolean(actionLoading)}
-                onClick={handlePull}
-                className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
-              >
-                <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
-                Pull Image
-              </Button>
-            </div>
+              </div>
+            )}
 
             {actionError && (
               <div className="p-2.5 bg-rose-950/30 border border-rose-800/50 rounded-lg text-rose-300 text-xs flex items-center justify-between gap-2">

@@ -113,6 +113,11 @@ export const NodeDetailView: React.FC<NodeDetailViewProps> = ({ nodeId }) => {
                 Current Origin
               </Badge>
             )}
+            {(node.read_only || hostInfo?.read_only) && (
+              <Badge variant="outline" className="text-xs bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono">
+                Read-Only
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -178,6 +183,12 @@ export const NodeDetailView: React.FC<NodeDetailViewProps> = ({ nodeId }) => {
             <div className="flex justify-between items-center">
               <span className="text-slate-400">Version:</span>
               <span className="font-mono text-slate-200">{node.version || 'unknown'}</span>
+            </div>
+            <div className="flex justify-between items-center">
+              <span className="text-slate-400">Mode:</span>
+              <span className={`font-mono ${node.read_only || hostInfo?.read_only ? 'text-amber-400 font-semibold' : 'text-slate-200'}`}>
+                {node.read_only || hostInfo?.read_only ? 'Read-Only' : 'Read/Write'}
+              </span>
             </div>
             <div className="flex justify-between items-start">
               <span className="text-slate-400">Addresses:</span>

@@ -96,6 +96,7 @@ export function useClusterStacksQuery(selectedHostId?: string | null) {
             hostName: node.name,
             hostEndpoint: endpoint,
             hostAddress: rawAddress,
+            hostReadOnly: node.read_only,
           }));
         })
       );
@@ -159,6 +160,7 @@ export function useClusterContainersQuery(selectedHostId?: string | null) {
             hostName: node.name,
             hostEndpoint: endpoint,
             hostAddress: rawAddress,
+            hostReadOnly: node.read_only,
           }));
         })
       );
