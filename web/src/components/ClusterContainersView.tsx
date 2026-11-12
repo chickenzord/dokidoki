@@ -3,7 +3,6 @@ import { useRouter } from '@tanstack/react-router';
 import { ClusterContainer } from '../types';
 import { useClusterContainersQuery } from '../hooks/useClusterData';
 import { getHostForContainer } from '../lib/utils';
-import { ContainerDetailSheet } from './ContainerDetailSheet';
 import { GenerateComposeDialog } from './GenerateComposeDialog';
 import { ContainerLogsModal } from './ContainerLogsModal';
 import { Badge } from './ui/badge';
@@ -36,7 +35,6 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
   const [stateFilter, setStateFilter] = useState<'all' | 'running' | 'exited' | 'paused'>('all');
   const [typeFilter, setTypeFilter] = useState<'all' | 'standalone' | 'stack'>('all');
   const [localSearch, setLocalSearch] = useState('');
-  const [selectedContainer, setSelectedContainer] = useState<ClusterContainer | null>(null);
   const [generatingForContainer, setGeneratingForContainer] = useState<ClusterContainer | null>(null);
   const [logsForContainer, setLogsForContainer] = useState<ClusterContainer | null>(null);
   const [dismissedUnreachable, setDismissedUnreachable] = useState(false);
@@ -436,13 +434,6 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
           </table>
         </div>
       )}
-
-      {/* Slide-over Sheet for Container Detail */}
-      <ContainerDetailSheet
-        container={selectedContainer}
-        isOpen={Boolean(selectedContainer)}
-        onClose={() => setSelectedContainer(null)}
-      />
 
       {/* Generate Compose Dialog */}
       <GenerateComposeDialog

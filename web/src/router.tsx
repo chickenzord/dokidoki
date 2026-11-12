@@ -15,6 +15,8 @@ import { ClusterNodesView } from './components/ClusterNodesView';
 import { NodeDetailView } from './pages/NodeDetailView';
 import { NodeStackDetailRouteComponent } from './pages/NodeStackDetailRouteComponent';
 import { NodeContainerDetailRouteComponent } from './pages/NodeContainerDetailRouteComponent';
+import { useDocumentTitle } from './hooks/useDocumentTitle';
+import { useNodesQuery } from './hooks/useClusterData';
 
 export interface ClusterUIContextType {
   selectedHostId: string | null;
@@ -108,6 +110,7 @@ const stacksRoute = createRoute({
 });
 
 function StacksRouteComponent() {
+  useDocumentTitle('Stacks');
   const search = stacksRoute.useSearch();
   const { selectedHostId, searchQuery } = useClusterUI();
   const effectiveHost =
@@ -141,6 +144,7 @@ const containersRoute = createRoute({
 });
 
 function ContainersRouteComponent() {
+  useDocumentTitle('Containers');
   const search = containersRoute.useSearch();
   const { selectedHostId, searchQuery } = useClusterUI();
   const effectiveHost =
@@ -161,8 +165,13 @@ function ContainersRouteComponent() {
 const nodesRoute = createRoute({
   getParentRoute: () => rootRoute,
   path: '/nodes',
-  component: ClusterNodesView,
+  component: NodesRouteComponent,
 });
+
+function NodesRouteComponent() {
+  useDocumentTitle('Nodes');
+  return <ClusterNodesView />;
+}
 
 // Node-scoped route 1: /nodes/$nodeId
 const nodeDetailRoute = createRoute({
@@ -186,6 +195,11 @@ const nodeStacksRoute = createRoute({
 function NodeStacksRouteComponent() {
   const { nodeId } = useParams({ from: '/nodes/$nodeId/stacks' });
   const { searchQuery } = useClusterUI();
+  const { data: nodes = [] } = useNodesQuery();
+  const node = nodes.find((n) => n.id === nodeId);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Stacks on ${nodeLabel}`);
+
   return (
     <div className="space-y-4">
       <ClusterStacksView selectedHostId={nodeId} searchQuery={searchQuery} />
@@ -210,6 +224,11 @@ const nodeContainersRoute = createRoute({
 function NodeContainersRouteComponent() {
   const { nodeId } = useParams({ from: '/nodes/$nodeId/containers' });
   const { searchQuery } = useClusterUI();
+  const { data: nodes = [] } = useNodesQuery();
+  const node = nodes.find((n) => n.id === nodeId);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Containers on ${nodeLabel}`);
+
   return (
     <div className="space-y-4">
       <ClusterContainersView selectedHostId={nodeId} searchQuery={searchQuery} />

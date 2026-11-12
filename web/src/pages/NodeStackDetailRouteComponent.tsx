@@ -1,17 +1,22 @@
 import React from 'react';
 import { useParams, Link } from '@tanstack/react-router';
 import { useNodesQuery, useStackDetailQuery, getNodeEndpoint } from '../hooks/useClusterData';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { NodeContextHeader } from '../components/NodeContextHeader';
 import { StackDetailSheet } from '../components/StackDetailSheet';
-import { ContainerDetailSheet } from '../components/ContainerDetailSheet';
-import { ClusterStack, ClusterContainer } from '../types';
-import { Loader2, AlertCircle, ArrowLeft } from 'lucide-react';
+import { ClusterStack } from '../types';
+import { Loader2, AlertCircle, ArrowLeft, Layers } from 'lucide-react';
+import { useSmartBack } from '../lib/navigation';
 
 export const NodeStackDetailRouteComponent: React.FC = () => {
   const params = useParams({ strict: false }) as { nodeId: string; stackName: string };
   const { nodeId, stackName } = params;
+  const { goBackOr } = useSmartBack();
 
   const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
   const node = nodes.find((n) => n.id === nodeId);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Stack: ${stackName}${nodeLabel ? ` (${nodeLabel})` : ''}`);
   const endpoint = node ? getNodeEndpoint(node) : (nodeId === 'local' ? '' : `/api/v1/nodes/${encodeURIComponent(nodeId)}/proxy`);
 
   const { data: stackDetail, isLoading: stackLoading, error } = useStackDetailQuery(
@@ -19,8 +24,6 @@ export const NodeStackDetailRouteComponent: React.FC = () => {
     stackName,
     Boolean(stackName)
   );
-
-  const [selectedContainer, setSelectedContainer] = React.useState<ClusterContainer | null>(null);
 
   const clusterStack: ClusterStack | null = stackDetail
     ? {
@@ -33,9 +36,8 @@ export const NodeStackDetailRouteComponent: React.FC = () => {
       }
     : null;
 
-  const handleClose = () => {
-    // Navigate back to node stacks list
-    window.history.back();
+  const handleBack = () => {
+    goBackOr({ to: '/nodes/$nodeId/stacks', params: { nodeId } });
   };
 
   if (nodesLoading || (stackLoading && !stackDetail)) {
@@ -50,14 +52,14 @@ export const NodeStackDetailRouteComponent: React.FC = () => {
   if (error || !clusterStack) {
     return (
       <div className="space-y-4">
-        <Link
-          to="/nodes/$nodeId/stacks"
-          params={{ nodeId }}
-          className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+        <button
+          type="button"
+          onClick={handleBack}
+          className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           Back to Node Stacks
-        </Link>
+        </button>
         <div className="p-8 border border-slate-800 rounded-xl text-center text-xs text-slate-400 bg-slate-900/40">
           <AlertCircle className="w-5 h-5 text-rose-400 mx-auto mb-2" />
           Failed to load stack <span className="font-mono text-slate-200">{stackName}</span> on node{' '}
@@ -68,35 +70,43 @@ export const NodeStackDetailRouteComponent: React.FC = () => {
   }
 
   return (
-    <div>
-      <StackDetailSheet
-        stack={clusterStack}
-        isOpen={true}
-        onClose={handleClose}
-        onSelectContainer={(containerId, hostEndpoint, containerSummary) => {
-          setSelectedContainer({
-            id: containerId,
-            name: containerSummary?.name || containerId.substring(0, 12),
-            image: containerSummary?.image || '',
-            state: containerSummary?.state || 'running',
-            status: containerSummary?.status || '',
-            created: containerSummary?.created || 0,
-            ports: containerSummary?.ports || [],
-            labels: containerSummary?.labels || {},
-            hostId: node?.id || nodeId,
-            hostName: node?.name || nodeId,
-            hostEndpoint,
-            stack: stackName,
-            service: containerSummary?.service,
-          });
-        }}
+    <div className="space-y-4 max-w-7xl mx-auto">
+      {/* Top Breadcrumbs */}
+      <nav aria-label="Breadcrumb" className="flex items-center flex-wrap gap-1.5 text-xs text-slate-400 font-sans">
+        <Link to="/nodes" className="hover:text-slate-200 transition-colors">
+          Nodes
+        </Link>
+        <span>/</span>
+        <Link to="/nodes/$nodeId" params={{ nodeId }} className="hover:text-slate-200 transition-colors font-mono">
+          {node?.name || nodeId}
+        </Link>
+        <span>/</span>
+        <Link to="/nodes/$nodeId/stacks" params={{ nodeId }} className="hover:text-slate-200 transition-colors">
+          Stacks
+        </Link>
+        <span>/</span>
+        <span className="text-slate-200 font-mono font-medium flex items-center gap-1">
+          <Layers className="w-3.5 h-3.5 text-rose-400" />
+          {clusterStack.name}
+        </span>
+      </nav>
+
+      {/* Node Context Header with Quick Back and Node stats */}
+      <NodeContextHeader
+        nodeId={nodeId}
+        node={node}
+        fallbackTo={`/nodes/${encodeURIComponent(nodeId)}/stacks`}
+        activeSection="stacks"
       />
 
-      <ContainerDetailSheet
-        container={selectedContainer}
-        isOpen={Boolean(selectedContainer)}
-        onClose={() => setSelectedContainer(null)}
-      />
+      {/* Standalone Stack Detail View */}
+      <div className="pt-2">
+        <StackDetailSheet
+          stack={clusterStack}
+          isStandalonePage={true}
+          isOpen={true}
+        />
+      </div>
     </div>
   );
 };

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useMemo } from 'react';
-import { Link } from '@tanstack/react-router';
+import { Link, useRouter } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { ClusterStack, StackFilesResponse, ContainerSummary, CreateStackFile } from '../types';
 import { useStackFilesQuery, useStackContainersQuery, useStackDetailQuery } from '../hooks/useClusterData';
@@ -43,21 +43,24 @@ import {
   ExternalLink,
 } from 'lucide-react';
 
-interface StackDetailSheetProps {
+export interface StackDetailSheetProps {
   stack: ClusterStack | null;
-  isOpen: boolean;
-  onClose: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
   onSelectContainer?: (containerId: string, hostEndpoint: string, container?: ContainerSummary) => void;
   onStackUpdated?: (stack: ClusterStack) => void;
+  isStandalonePage?: boolean;
 }
 
 export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
   stack: initialStack,
-  isOpen,
-  onClose,
+  isOpen = true,
+  onClose = () => {},
   onSelectContainer,
   onStackUpdated,
+  isStandalonePage = false,
 }) => {
+  const router = useRouter();
   const queryClient = useQueryClient();
   const [importDialogOpen, setImportDialogOpen] = useState(false);
   const [copiedFile, setCopiedFile] = useState<string | null>(null);
@@ -419,18 +422,17 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
 
   if (!stack) return null;
 
-  return (
-    <>
-      <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
-        <SheetContent className="w-full sm:max-w-2xl md:max-w-3xl overflow-y-auto bg-slate-900 border-l border-slate-800 p-6 text-slate-100">
-          <SheetHeader className="space-y-2 pb-4 border-b border-slate-800">
-            <div className="flex flex-wrap items-center justify-between gap-3 pr-8">
-              <div className="flex items-center gap-2">
-                <SheetTitle className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-                  <Layers className="w-5 h-5 text-rose-500" />
-                  {stack.name}
-                </SheetTitle>
-              </div>
+  const TitleTag = isStandalonePage ? 'h2' : SheetTitle;
+
+  const headerContent = (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 pr-8">
+        <div className="flex items-center gap-2">
+          <TitleTag className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+            <Layers className="w-5 h-5 text-rose-500" />
+            {stack.name}
+          </TitleTag>
+        </div>
 
               <div className="flex items-center gap-2">
                 {stack.source === 'external' ? (
@@ -628,9 +630,11 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 </Button>
               )}
             </div>
-          </SheetHeader>
+    </div>
+  );
 
-          <div className="space-y-6 py-4">
+  const bodyContent = (
+    <div className={isStandalonePage ? 'space-y-6 pt-6' : 'space-y-6 py-4'}>
             {/* Section 1: Containers Table */}
             <div className="space-y-2.5">
               <div className="flex items-center justify-between">
@@ -662,7 +666,19 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                       return (
                         <div
                           key={container.id}
-                          onClick={() => onSelectContainer?.(container.id, stack.hostEndpoint, container)}
+                          onClick={() => {
+                            if (onSelectContainer) {
+                              onSelectContainer(container.id, stack.hostEndpoint, container);
+                            } else {
+                              router.navigate({
+                                to: '/nodes/$nodeId/containers/$containerId',
+                                params: {
+                                  nodeId: stack.hostId || 'local',
+                                  containerId: container.id,
+                                },
+                              });
+                            }
+                          }}
                           className="flex items-center justify-between p-3 hover:bg-slate-800/50 cursor-pointer transition-colors group"
                         >
                           <div className="flex items-center gap-3 min-w-0">
@@ -1161,8 +1177,29 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
               )}
             </div>
           </div>
-        </SheetContent>
-      </Sheet>
+  );
+
+  const mainView = isStandalonePage ? (
+    <div className="space-y-6">
+      <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/60 shadow-sm">
+        {headerContent}
+      </div>
+      {bodyContent}
+    </div>
+  ) : (
+    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent className="w-full sm:max-w-2xl md:max-w-3xl overflow-y-auto bg-slate-900 border-l border-slate-800 p-6 text-slate-100">
+        <SheetHeader className="space-y-2 pb-4 border-b border-slate-800">
+          {headerContent}
+        </SheetHeader>
+        {bodyContent}
+      </SheetContent>
+    </Sheet>
+  );
+
+  return (
+    <>
+      {mainView}
 
       <ImportStackDialog
         isOpen={importDialogOpen}

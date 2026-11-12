@@ -1,6 +1,7 @@
 import React from 'react';
 import { Link } from '@tanstack/react-router';
 import { useNodesQuery } from '../hooks/useClusterData';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
 import { api } from '../services/api';
 import { useQuery } from '@tanstack/react-query';
 import { getNodeEndpoint, CLUSTER_NODE_TIMEOUT_MS } from '../hooks/useClusterData';
@@ -26,6 +27,8 @@ interface NodeDetailViewProps {
 export const NodeDetailView: React.FC<NodeDetailViewProps> = ({ nodeId }) => {
   const { data: nodes = [], isLoading: nodesLoading, refetch: refetchNodes } = useNodesQuery();
   const node = nodes.find((n) => n.id === nodeId);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Node: ${nodeLabel}`);
 
   const endpoint = node ? getNodeEndpoint(node) : '';
 

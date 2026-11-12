@@ -40,16 +40,18 @@ import {
   ExternalLink,
 } from 'lucide-react';
 
-interface ContainerDetailSheetProps {
+export interface ContainerDetailSheetProps {
   container: ClusterContainer | null;
-  isOpen: boolean;
-  onClose: () => void;
+  isOpen?: boolean;
+  onClose?: () => void;
+  isStandalonePage?: boolean;
 }
 
 export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
   container,
-  isOpen,
-  onClose,
+  isOpen = true,
+  onClose = () => {},
+  isStandalonePage = false,
 }) => {
   const queryClient = useQueryClient();
   const [generateDialogOpen, setGenerateDialogOpen] = useState(false);
@@ -189,197 +191,198 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
     });
   };
 
-  return (
-    <>
-      <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
-        <SheetContent className="w-full sm:max-w-2xl md:max-w-3xl overflow-y-auto bg-slate-900 border-l border-slate-800 p-6 text-slate-100">
-          <SheetHeader className="space-y-2 pb-4 border-b border-slate-800">
-            <div className="flex flex-wrap items-center justify-between gap-3 pr-8">
-              <div className="flex items-center gap-2">
-                <SheetTitle className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
-                  <Box className="w-5 h-5 text-rose-500" />
-                  {cleanName}
-                </SheetTitle>
-              </div>
+  const TitleTag = isStandalonePage ? 'h2' : SheetTitle;
 
-              <div className="flex items-center gap-2">
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => setLogsOpen(true)}
-                  className="h-7 text-xs bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white border-indigo-500/30 transition-colors"
-                >
-                  <Terminal className="w-3.5 h-3.5 mr-1.5" />
-                  Logs
-                </Button>
-                {isStandalone ? (
-                  !isReadOnly && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setGenerateDialogOpen(true)}
-                      className="h-7 text-xs bg-amber-600/10 hover:bg-amber-600 text-amber-400 hover:text-white border-amber-500/30 transition-colors"
-                    >
-                      <Sparkles className="w-3.5 h-3.5 mr-1.5" />
-                      Manage as Stack
-                    </Button>
-                  )
-                ) : (
-                  <Badge variant="outline" className="text-xs bg-blue-950/40 text-blue-400 border-blue-800/60 font-mono flex items-center gap-1">
-                    <Layers className="w-3 h-3" />
-                    {effectiveStackName || 'Stack'}
-                  </Badge>
-                )}
-              </div>
-            </div>
+  const headerContent = (
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center justify-between gap-3 pr-8">
+        <div className="flex items-center gap-2">
+          <TitleTag className="text-xl font-bold text-white tracking-tight flex items-center gap-2">
+            <Box className="w-5 h-5 text-rose-500" />
+            {cleanName}
+          </TitleTag>
+        </div>
 
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-              {container.hostId ? (
-                <Link
-                  to="/nodes/$nodeId"
-                  params={{ nodeId: container.hostId }}
-                  className="hover:opacity-80 transition-opacity"
-                >
-                  <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1 cursor-pointer hover:border-slate-600">
-                    <Server className="w-3 h-3 text-slate-400" />
-                    {container.hostName}
-                  </Badge>
-                </Link>
-              ) : (
-                <Link to="/nodes" className="hover:opacity-80 transition-opacity">
-                  <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1 cursor-pointer hover:border-slate-600">
-                    <Server className="w-3 h-3 text-slate-400" />
-                    {container.hostName}
-                  </Badge>
-                </Link>
-              )}
-
-              <Badge
+        <div className="flex items-center gap-2">
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => setLogsOpen(true)}
+            className="h-7 text-xs bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white border-indigo-500/30 transition-colors"
+          >
+            <Terminal className="w-3.5 h-3.5 mr-1.5" />
+            Logs
+          </Button>
+          {isStandalone ? (
+            !isReadOnly && (
+              <Button
+                size="sm"
                 variant="outline"
-                className={`text-[11px] font-mono capitalize ${
-                  isRunning
-                    ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/60'
-                    : isCompleted
-                    ? 'bg-blue-950/40 text-blue-300 border-blue-800/60'
-                    : 'bg-slate-800 text-slate-400 border-slate-700'
-                }`}
+                onClick={() => setGenerateDialogOpen(true)}
+                className="h-7 text-xs bg-amber-600/10 hover:bg-amber-600 text-amber-400 hover:text-white border-amber-500/30 transition-colors"
               >
-                {isCompleted ? 'Completed (Exit 0)' : container.state}
-              </Badge>
+                <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                Manage as Stack
+              </Button>
+            )
+          ) : (
+            <Badge variant="outline" className="text-xs bg-blue-950/40 text-blue-400 border-blue-800/60 font-mono flex items-center gap-1">
+              <Layers className="w-3 h-3" />
+              {effectiveStackName || 'Stack'}
+            </Badge>
+          )}
+        </div>
+      </div>
 
-              {container.is_self && (
-                <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
-                  <AlertTriangle className="w-3 h-3 text-amber-400" />
-                  Self
-                </Badge>
+      <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
+        {container.hostId ? (
+          <Link
+            to="/nodes/$nodeId"
+            params={{ nodeId: container.hostId }}
+            className="hover:opacity-80 transition-opacity"
+          >
+            <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1 cursor-pointer hover:border-slate-600">
+              <Server className="w-3 h-3 text-slate-400" />
+              {container.hostName}
+            </Badge>
+          </Link>
+        ) : (
+          <Link to="/nodes" className="hover:opacity-80 transition-opacity">
+            <Badge variant="outline" className="bg-slate-800 text-slate-300 border-slate-700 font-mono flex items-center gap-1 cursor-pointer hover:border-slate-600">
+              <Server className="w-3 h-3 text-slate-400" />
+              {container.hostName}
+            </Badge>
+          </Link>
+        )}
+
+        <Badge
+          variant="outline"
+          className={`text-[11px] font-mono capitalize ${
+            isRunning
+              ? 'bg-emerald-950/40 text-emerald-400 border-emerald-800/60'
+              : isCompleted
+              ? 'bg-blue-950/40 text-blue-300 border-blue-800/60'
+              : 'bg-slate-800 text-slate-400 border-slate-700'
+          }`}
+        >
+          {isCompleted ? 'Completed (Exit 0)' : container.state}
+        </Badge>
+
+        {container.is_self && (
+          <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
+            <AlertTriangle className="w-3 h-3 text-amber-400" />
+            Self
+          </Badge>
+        )}
+
+        {isReadOnly && (
+          <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
+            Read-Only
+          </Badge>
+        )}
+
+        <span className="text-slate-600">•</span>
+
+        <span className="font-mono text-slate-400 text-[11px] truncate max-w-xs" title={container.id}>
+          {container.id.substring(0, 12)}
+        </span>
+      </div>
+
+      {/* Read-Only Node Alert Banner */}
+      {isReadOnly && (
+        <div className="mt-3 p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs flex items-center gap-2.5">
+          <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
+          <div className="leading-relaxed">
+            <span className="font-semibold text-amber-200">Read-Only Node: </span>
+            This node is configured in read-only mode. All mutation actions (Start, Stop, Restart, Pull Image) are disabled.
+          </div>
+        </div>
+      )}
+
+      {!isReadOnly && (
+        <div className="flex flex-wrap items-center gap-2 pt-3">
+          {isRunning ? (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={Boolean(actionLoading)}
+              onClick={() => handleStop()}
+              className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+            >
+              {actionLoading === 'stop' ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
               )}
-
-              {isReadOnly && (
-                <Badge variant="outline" className="bg-amber-950/40 text-amber-400 border-amber-800/60 font-mono text-[11px] flex items-center gap-1">
-                  Read-Only
-                </Badge>
+              Stop
+            </Button>
+          ) : (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={Boolean(actionLoading)}
+              onClick={handleStart}
+              className="h-8 text-xs bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 border-emerald-800/60 transition-colors"
+            >
+              {actionLoading === 'start' ? (
+                <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+              ) : (
+                <Play className="w-3.5 h-3.5 mr-1.5" />
               )}
+              Start
+            </Button>
+          )}
 
-              <span className="text-slate-600">•</span>
-
-              <span className="font-mono text-slate-400 text-[11px] truncate max-w-xs" title={container.id}>
-                {container.id.substring(0, 12)}
-              </span>
-            </div>
-
-            {/* Read-Only Node Alert Banner */}
-            {isReadOnly && (
-              <div className="mt-3 p-3 bg-amber-950/40 border border-amber-800/60 rounded-lg text-amber-300 text-xs flex items-center gap-2.5">
-                <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0" />
-                <div className="leading-relaxed">
-                  <span className="font-semibold text-amber-200">Read-Only Node: </span>
-                  This node is configured in read-only mode. All mutation actions (Start, Stop, Restart, Pull Image) are disabled.
-                </div>
-              </div>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={Boolean(actionLoading)}
+            onClick={() => handleRestart()}
+            className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+          >
+            {actionLoading === 'restart' ? (
+              <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
+            ) : (
+              <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
             )}
+            Restart
+          </Button>
 
-            {!isReadOnly && (
-              <div className="flex flex-wrap items-center gap-2 pt-3">
-                {isRunning ? (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={Boolean(actionLoading)}
-                    onClick={() => handleStop()}
-                    className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
-                  >
-                    {actionLoading === 'stop' ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <Square className="w-3.5 h-3.5 mr-1.5 text-rose-400" />
-                    )}
-                    Stop
-                  </Button>
-                ) : (
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    disabled={Boolean(actionLoading)}
-                    onClick={handleStart}
-                    className="h-8 text-xs bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-400 border-emerald-800/60 transition-colors"
-                  >
-                    {actionLoading === 'start' ? (
-                      <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                    ) : (
-                      <Play className="w-3.5 h-3.5 mr-1.5" />
-                    )}
-                    Start
-                  </Button>
-                )}
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={Boolean(actionLoading)}
+            onClick={handlePull}
+            className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
+          >
+            <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+            Pull Image
+          </Button>
+        </div>
+      )}
 
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={Boolean(actionLoading)}
-                  onClick={() => handleRestart()}
-                  className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
-                >
-                  {actionLoading === 'restart' ? (
-                    <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
-                  ) : (
-                    <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
-                  )}
-                  Restart
-                </Button>
+      {actionError && (
+        <div className="p-2.5 bg-rose-950/30 border border-rose-800/50 rounded-lg text-rose-300 text-xs flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
+            <span className="font-mono">{actionError}</span>
+          </div>
+          <Button
+            size="sm"
+            variant="ghost"
+            onClick={() => setActionError(null)}
+            className="h-6 px-2 text-xs text-rose-400 hover:text-white"
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
+    </div>
+  );
 
-                <Button
-                  size="sm"
-                  variant="outline"
-                  disabled={Boolean(actionLoading)}
-                  onClick={handlePull}
-                  className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
-                >
-                  <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
-                  Pull Image
-                </Button>
-              </div>
-            )}
-
-            {actionError && (
-              <div className="p-2.5 bg-rose-950/30 border border-rose-800/50 rounded-lg text-rose-300 text-xs flex items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <XCircle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span className="font-mono">{actionError}</span>
-                </div>
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => setActionError(null)}
-                  className="h-6 px-2 text-xs text-rose-400 hover:text-white"
-                >
-                  Dismiss
-                </Button>
-              </div>
-            )}
-          </SheetHeader>
-
-          <div className="space-y-6 py-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+  const bodyContent = (
+    <div className={isStandalonePage ? 'space-y-6 pt-6' : 'space-y-6 py-4'}>
+      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="p-3 rounded-lg bg-slate-950/40 border border-slate-800/60 space-y-1">
                 <div className="text-[11px] font-medium uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
                   <Tag className="w-3 h-3 text-slate-500" />
@@ -595,8 +598,29 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
               )}
             </div>
           </div>
-        </SheetContent>
-      </Sheet>
+  );
+
+  const mainView = isStandalonePage ? (
+    <div className="space-y-6">
+      <div className="p-5 rounded-xl border border-slate-800 bg-slate-900/60 shadow-sm">
+        {headerContent}
+      </div>
+      {bodyContent}
+    </div>
+  ) : (
+    <Sheet open={isOpen} onOpenChange={(open) => !open && onClose()}>
+      <SheetContent className="w-full sm:max-w-2xl md:max-w-3xl overflow-y-auto bg-slate-900 border-l border-slate-800 p-6 text-slate-100">
+        <SheetHeader className="space-y-2 pb-4 border-b border-slate-800">
+          {headerContent}
+        </SheetHeader>
+        {bodyContent}
+      </SheetContent>
+    </Sheet>
+  );
+
+  return (
+    <>
+      {mainView}
 
       <GenerateComposeDialog
         isOpen={generateDialogOpen}

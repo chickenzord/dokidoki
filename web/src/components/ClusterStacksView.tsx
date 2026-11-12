@@ -1,9 +1,6 @@
 import React, { useState, useMemo, useDeferredValue } from 'react';
 import { useRouter } from '@tanstack/react-router';
-import { ClusterContainer } from '../types';
 import { useClusterStacksQuery } from '../hooks/useClusterData';
-import { StackDetailSheet } from './StackDetailSheet';
-import { ContainerDetailSheet } from './ContainerDetailSheet';
 import { Badge } from './ui/badge';
 import { Input } from './ui/input';
 import {
@@ -36,23 +33,11 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
   const [sourceFilter, setSourceFilter] = useState<'all' | 'managed' | 'external'>('all');
   const [statusFilter, setStatusFilter] = useState<'all' | 'running'>('all');
   const [localSearch, setLocalSearch] = useState('');
-  const [selectedStackKey, setSelectedStackKey] = useState<{ hostId: string; name: string } | null>(null);
   const [dismissedUnreachable, setDismissedUnreachable] = useState(false);
-
-  // For opening a container from the stack sheet
-  const [selectedContainer, setSelectedContainer] = useState<ClusterContainer | null>(null);
 
   const { data, isLoading, error } = useClusterStacksQuery(selectedHostId);
   const stacks = data?.items ?? [];
   const unreachableNodes = data?.unreachableNodes ?? [];
-
-  // Derive selectedStack from stacks query data without useEffect syncing
-  const selectedStack = useMemo(() => {
-    if (!selectedStackKey) return null;
-    return stacks.find(
-      (s) => s.hostId === selectedStackKey.hostId && s.name === selectedStackKey.name
-    ) ?? null;
-  }, [stacks, selectedStackKey]);
 
   const rawSearch = initialSearch || localSearch;
   const deferredSearch = useDeferredValue(rawSearch);
@@ -335,38 +320,6 @@ export const ClusterStacksView: React.FC<ClusterStacksViewProps> = ({
           </div>
         </TooltipProvider>
       )}
-
-      {/* Slide-over Sheet for Stack Detail */}
-      <StackDetailSheet
-        stack={selectedStack}
-        isOpen={Boolean(selectedStack)}
-        onClose={() => setSelectedStackKey(null)}
-        onStackUpdated={(updated) => setSelectedStackKey({ hostId: updated.hostId, name: updated.name })}
-        onSelectContainer={(containerId, hostEndpoint, containerSummary) => {
-          setSelectedContainer({
-            id: containerId,
-            name: containerSummary?.name || containerId.substring(0, 12),
-            image: containerSummary?.image || '',
-            state: containerSummary?.state || 'running',
-            status: containerSummary?.status || '',
-            created: containerSummary?.created || 0,
-            ports: containerSummary?.ports || [],
-            labels: containerSummary?.labels || {},
-            hostId: '',
-            hostName: selectedStack?.hostName || '',
-            hostEndpoint,
-            stack: selectedStack?.name || containerSummary?.stack,
-            service: containerSummary?.service,
-          });
-        }}
-      />
-
-      {/* Slide-over Sheet for Container Detail if opened from Stack */}
-      <ContainerDetailSheet
-        container={selectedContainer}
-        isOpen={Boolean(selectedContainer)}
-        onClose={() => setSelectedContainer(null)}
-      />
     </div>
   );
 };

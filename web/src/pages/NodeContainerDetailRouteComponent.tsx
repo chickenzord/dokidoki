@@ -1,13 +1,17 @@
 import React from 'react';
 import { useParams, Link } from '@tanstack/react-router';
 import { useNodesQuery, useContainerInspectQuery, getNodeEndpoint } from '../hooks/useClusterData';
+import { useDocumentTitle } from '../hooks/useDocumentTitle';
+import { NodeContextHeader } from '../components/NodeContextHeader';
 import { ContainerDetailSheet } from '../components/ContainerDetailSheet';
 import { ClusterContainer } from '../types';
-import { Loader2, AlertCircle, ArrowLeft } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowLeft, Box, Layers } from 'lucide-react';
+import { useSmartBack } from '../lib/navigation';
 
 export const NodeContainerDetailRouteComponent: React.FC = () => {
   const params = useParams({ strict: false }) as { nodeId: string; containerId: string };
   const { nodeId, containerId } = params;
+  const { goBackOr } = useSmartBack();
 
   const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
   const node = nodes.find((n) => n.id === nodeId);
@@ -17,6 +21,12 @@ export const NodeContainerDetailRouteComponent: React.FC = () => {
     endpoint,
     containerId
   );
+
+  const containerLabel = (inspectData?.Name ? inspectData.Name.replace(/^\//, '') : null) || containerId.substring(0, 12);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Container: ${containerLabel}${nodeLabel ? ` (${nodeLabel})` : ''}`);
+
+  const stackName = inspectData?.stack_name || inspectData?.Config?.Labels?.['com.docker.compose.project'];
 
   const clusterContainer: ClusterContainer | null = inspectData
     ? {
@@ -45,15 +55,14 @@ export const NodeContainerDetailRouteComponent: React.FC = () => {
         hostEndpoint: endpoint,
         hostAddress: node?.addresses?.[0],
         hostReadOnly: node?.read_only,
-        stack: inspectData.stack_name || inspectData.Config?.Labels?.['com.docker.compose.project'],
+        stack: stackName,
         service: inspectData.Config?.Labels?.['com.docker.compose.service'],
         exit_code: inspectData.State?.ExitCode,
       }
     : null;
 
-  const handleClose = () => {
-    // Navigate back to node containers list
-    window.history.back();
+  const handleBack = () => {
+    goBackOr({ to: '/nodes/$nodeId/containers', params: { nodeId } });
   };
 
   if (nodesLoading || (inspectLoading && !inspectData)) {
@@ -68,14 +77,14 @@ export const NodeContainerDetailRouteComponent: React.FC = () => {
   if (error || !clusterContainer) {
     return (
       <div className="space-y-4">
-        <Link
-          to="/nodes/$nodeId/containers"
-          params={{ nodeId }}
-          className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+        <button
+          type="button"
+          onClick={handleBack}
+          className="inline-flex items-center gap-1.5 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer"
         >
           <ArrowLeft className="w-3.5 h-3.5" />
           Back to Node Containers
-        </Link>
+        </button>
         <div className="p-8 border border-slate-800 rounded-xl text-center text-xs text-slate-400 bg-slate-900/40">
           <AlertCircle className="w-5 h-5 text-rose-400 mx-auto mb-2" />
           Failed to load container <span className="font-mono text-slate-200">{containerId}</span> on node{' '}
@@ -86,10 +95,56 @@ export const NodeContainerDetailRouteComponent: React.FC = () => {
   }
 
   return (
-    <ContainerDetailSheet
-      container={clusterContainer}
-      isOpen={true}
-      onClose={handleClose}
-    />
+    <div className="space-y-4 max-w-7xl mx-auto">
+      {/* Top Breadcrumbs */}
+      <nav aria-label="Breadcrumb" className="flex items-center flex-wrap gap-1.5 text-xs text-slate-400 font-sans">
+        <Link to="/nodes" className="hover:text-slate-200 transition-colors">
+          Nodes
+        </Link>
+        <span>/</span>
+        <Link to="/nodes/$nodeId" params={{ nodeId }} className="hover:text-slate-200 transition-colors font-mono">
+          {node?.name || nodeId}
+        </Link>
+        <span>/</span>
+        <Link to="/nodes/$nodeId/containers" params={{ nodeId }} className="hover:text-slate-200 transition-colors">
+          Containers
+        </Link>
+        {stackName && (
+          <>
+            <span>/</span>
+            <Link
+              to="/nodes/$nodeId/stacks/$stackName"
+              params={{ nodeId, stackName }}
+              className="text-blue-400 hover:text-blue-300 transition-colors font-mono flex items-center gap-1"
+            >
+              <Layers className="w-3 h-3" />
+              {stackName}
+            </Link>
+          </>
+        )}
+        <span>/</span>
+        <span className="text-slate-200 font-mono font-medium flex items-center gap-1">
+          <Box className="w-3.5 h-3.5 text-rose-400" />
+          {clusterContainer.name.replace(/^\//, '')}
+        </span>
+      </nav>
+
+      {/* Node Context Header with Quick Back and Node stats */}
+      <NodeContextHeader
+        nodeId={nodeId}
+        node={node}
+        fallbackTo={`/nodes/${encodeURIComponent(nodeId)}/containers`}
+        activeSection="containers"
+      />
+
+      {/* Standalone Container Detail View */}
+      <div className="pt-2">
+        <ContainerDetailSheet
+          container={clusterContainer}
+          isStandalonePage={true}
+          isOpen={true}
+        />
+      </div>
+    </div>
   );
 };
