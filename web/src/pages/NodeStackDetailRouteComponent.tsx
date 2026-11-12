@@ -1,11 +1,11 @@
 import React from 'react';
-import { useParams, Link } from '@tanstack/react-router';
+import { useParams } from '@tanstack/react-router';
 import { useNodesQuery, useStackDetailQuery, getNodeEndpoint } from '../hooks/useClusterData';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { NodeContextHeader } from '../components/NodeContextHeader';
 import { StackDetailSheet } from '../components/StackDetailSheet';
+import { BreadcrumbNav } from '../components/BreadcrumbNav';
 import { ClusterStack } from '../types';
-import { Loader2, AlertCircle, ArrowLeft, Layers } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowLeft, Layers, Server } from 'lucide-react';
 import { useSmartBack } from '../lib/navigation';
 
 export const NodeStackDetailRouteComponent: React.FC = () => {
@@ -71,32 +71,20 @@ export const NodeStackDetailRouteComponent: React.FC = () => {
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      {/* Top Breadcrumbs */}
-      <nav aria-label="Breadcrumb" className="flex items-center flex-wrap gap-1.5 text-xs text-slate-400 font-sans">
-        <Link to="/nodes" className="hover:text-slate-200 transition-colors">
-          Nodes
-        </Link>
-        <span>/</span>
-        <Link to="/nodes/$nodeId" params={{ nodeId }} className="hover:text-slate-200 transition-colors font-mono">
-          {node?.name || nodeId}
-        </Link>
-        <span>/</span>
-        <Link to="/nodes/$nodeId/stacks" params={{ nodeId }} className="hover:text-slate-200 transition-colors">
-          Stacks
-        </Link>
-        <span>/</span>
-        <span className="text-slate-200 font-mono font-medium flex items-center gap-1">
-          <Layers className="w-3.5 h-3.5 text-rose-400" />
-          {clusterStack.name}
-        </span>
-      </nav>
-
-      {/* Node Context Header with Quick Back and Node stats */}
-      <NodeContextHeader
-        nodeId={nodeId}
-        node={node}
-        fallbackTo={`/nodes/${encodeURIComponent(nodeId)}/stacks`}
-        activeSection="stacks"
+      {/* Top Breadcrumbs: direct hierarchy node > stack */}
+      <BreadcrumbNav
+        items={[
+          {
+            label: node?.name || nodeId,
+            to: '/nodes/$nodeId',
+            params: { nodeId },
+            icon: Server,
+          },
+          {
+            label: clusterStack.name,
+            icon: Layers,
+          },
+        ]}
       />
 
       {/* Standalone Stack Detail View */}

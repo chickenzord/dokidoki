@@ -579,7 +579,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 title={isReadOnly ? 'Node is in read-only mode' : isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
-                <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+                <RotateCw className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
                 Restart
               </Button>
 
@@ -591,7 +591,7 @@ export const StackDetailSheet: React.FC<StackDetailSheetProps> = ({
                 className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors disabled:opacity-40 disabled:cursor-not-allowed"
                 title={isReadOnly ? 'Node is in read-only mode' : isExternal ? 'Compose operations are disabled for unmanaged stacks. Import stack to manage.' : undefined}
               >
-                <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+                <Download className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
                 Pull
               </Button>
 

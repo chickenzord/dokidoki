@@ -1,11 +1,11 @@
 import React from 'react';
-import { useParams, Link } from '@tanstack/react-router';
+import { useParams } from '@tanstack/react-router';
 import { useNodesQuery, useContainerInspectQuery, getNodeEndpoint } from '../hooks/useClusterData';
 import { useDocumentTitle } from '../hooks/useDocumentTitle';
-import { NodeContextHeader } from '../components/NodeContextHeader';
 import { ContainerDetailSheet } from '../components/ContainerDetailSheet';
+import { BreadcrumbNav } from '../components/BreadcrumbNav';
 import { ClusterContainer } from '../types';
-import { Loader2, AlertCircle, ArrowLeft, Box, Layers } from 'lucide-react';
+import { Loader2, AlertCircle, ArrowLeft, Box, Layers, Server } from 'lucide-react';
 import { useSmartBack } from '../lib/navigation';
 
 export const NodeContainerDetailRouteComponent: React.FC = () => {
@@ -96,45 +96,30 @@ export const NodeContainerDetailRouteComponent: React.FC = () => {
 
   return (
     <div className="space-y-4 max-w-7xl mx-auto">
-      {/* Top Breadcrumbs */}
-      <nav aria-label="Breadcrumb" className="flex items-center flex-wrap gap-1.5 text-xs text-slate-400 font-sans">
-        <Link to="/nodes" className="hover:text-slate-200 transition-colors">
-          Nodes
-        </Link>
-        <span>/</span>
-        <Link to="/nodes/$nodeId" params={{ nodeId }} className="hover:text-slate-200 transition-colors font-mono">
-          {node?.name || nodeId}
-        </Link>
-        <span>/</span>
-        <Link to="/nodes/$nodeId/containers" params={{ nodeId }} className="hover:text-slate-200 transition-colors">
-          Containers
-        </Link>
-        {stackName && (
-          <>
-            <span>/</span>
-            <Link
-              to="/nodes/$nodeId/stacks/$stackName"
-              params={{ nodeId, stackName }}
-              className="text-blue-400 hover:text-blue-300 transition-colors font-mono flex items-center gap-1"
-            >
-              <Layers className="w-3 h-3" />
-              {stackName}
-            </Link>
-          </>
-        )}
-        <span>/</span>
-        <span className="text-slate-200 font-mono font-medium flex items-center gap-1">
-          <Box className="w-3.5 h-3.5 text-rose-400" />
-          {clusterContainer.name.replace(/^\//, '')}
-        </span>
-      </nav>
-
-      {/* Node Context Header with Quick Back and Node stats */}
-      <NodeContextHeader
-        nodeId={nodeId}
-        node={node}
-        fallbackTo={`/nodes/${encodeURIComponent(nodeId)}/containers`}
-        activeSection="containers"
+      {/* Top Breadcrumbs: direct hierarchy node > [stack] > container */}
+      <BreadcrumbNav
+        items={[
+          {
+            label: node?.name || nodeId,
+            to: '/nodes/$nodeId',
+            params: { nodeId },
+            icon: Server,
+          },
+          ...(stackName
+            ? [
+                {
+                  label: stackName,
+                  to: '/nodes/$nodeId/stacks/$stackName',
+                  params: { nodeId, stackName },
+                  icon: Layers,
+                },
+              ]
+            : []),
+          {
+            label: clusterContainer.name.replace(/^\//, ''),
+            icon: Box,
+          },
+        ]}
       />
 
       {/* Standalone Container Detail View */}

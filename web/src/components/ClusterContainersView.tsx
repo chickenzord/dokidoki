@@ -8,6 +8,7 @@ import { ContainerLogsModal } from './ContainerLogsModal';
 import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { Input } from './ui/input';
+import { FilterPills } from './ui/FilterPills';
 import {
   Box,
   Server,
@@ -37,7 +38,6 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
   const [localSearch, setLocalSearch] = useState('');
   const [generatingForContainer, setGeneratingForContainer] = useState<ClusterContainer | null>(null);
   const [logsForContainer, setLogsForContainer] = useState<ClusterContainer | null>(null);
-  const [dismissedUnreachable, setDismissedUnreachable] = useState(false);
 
   const { data, isLoading, error } = useClusterContainersQuery(selectedHostId);
   const containers = data?.items ?? [];
@@ -85,49 +85,11 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
 
   return (
     <div className="space-y-4">
-      {/* Reachability Warning Banner */}
-      {!dismissedUnreachable && unreachableNodes.length > 0 && (
-        <div className="p-3.5 bg-amber-950/40 border border-amber-800/60 rounded-xl text-amber-200 text-xs flex items-start justify-between gap-3 shadow-sm">
-          <div className="flex items-start gap-2.5 min-w-0">
-            <AlertTriangle className="w-4 h-4 text-amber-400 flex-shrink-0 mt-0.5" />
-            <div className="space-y-1 min-w-0 leading-relaxed">
-              <div className="font-semibold text-amber-300">
-                Cluster Node Reachability Warning
-              </div>
-              <div className="text-slate-300">
-                {unreachableNodes.length === 1 ? 'A cluster node' : `${unreachableNodes.length} cluster nodes`} failed to respond or timed out. Containers from {unreachableNodes.length === 1 ? 'this node' : 'these nodes'} may be omitted:
-              </div>
-              <div className="flex flex-wrap gap-1.5 pt-1">
-                {unreachableNodes.map((node) => (
-                  <span
-                    key={node.id}
-                    className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-900/40 text-amber-200 border border-amber-700/50 font-mono text-[11px] tabular-nums"
-                    title={node.error ? `Error: ${node.error}` : undefined}
-                  >
-                    <Server className="w-3 h-3 text-amber-400" />
-                    {node.name}
-                    {node.error && <span className="opacity-75 text-[10px]">({node.error})</span>}
-                  </span>
-                ))}
-              </div>
-            </div>
-          </div>
-          <button
-            type="button"
-            onClick={() => setDismissedUnreachable(true)}
-            aria-label="Dismiss reachability warning"
-            className="text-amber-400 hover:text-amber-200 p-1 rounded-md hover:bg-amber-900/40 transition-colors flex-shrink-0 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400"
-          >
-            <X className="w-4 h-4" />
-          </button>
-        </div>
-      )}
-
-      {/* Top Controls Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-2 border-b border-slate-800">
+      {/* Top Header Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-800">
         <div className="flex items-center gap-2">
           <h2 className="text-lg font-bold text-slate-100 flex items-center gap-2">
-            <Box className="w-5 h-5 text-rose-500" />
+            <Box className="w-5 h-5 text-slate-400" />
             Containers
           </h2>
           <Badge variant="outline" className="text-xs font-mono tabular-nums bg-slate-900 border-slate-700 text-slate-300">
@@ -135,100 +97,66 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
           </Badge>
         </div>
 
-        {/* Filters */}
+        {/* Search */}
+        {!initialSearch && (
+          <div className="relative w-full sm:w-64">
+            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
+            <Input
+              value={localSearch}
+              onChange={(e) => setLocalSearch(e.target.value)}
+              placeholder="Filter containers…"
+              className="h-8 pl-8 pr-7 text-xs bg-slate-900 border-slate-800 w-full focus-visible:ring-1 focus-visible:ring-slate-700 text-slate-200 placeholder:text-slate-500 rounded-lg"
+            />
+            {localSearch && (
+              <button
+                onClick={() => setLocalSearch('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white p-0.5"
+                aria-label="Clear search"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Line 2: Filter Group Bar */}
+      <div className="flex flex-wrap items-center justify-between gap-2.5 pt-0.5">
         <div className="flex flex-wrap items-center gap-2">
           {/* State Filter Pills */}
-          <div className="flex items-center rounded-lg bg-slate-900 border border-slate-800 p-0.5 text-xs">
-            <button
-              onClick={() => setStateFilter('all')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
-                stateFilter === 'all'
-                  ? 'bg-slate-800 text-white font-medium shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              All States
-            </button>
-            <button
-              onClick={() => setStateFilter('running')}
-              className={`px-2.5 py-1 rounded-md transition-all flex items-center gap-1.5 ${
-                stateFilter === 'running'
-                  ? 'bg-slate-800 text-white font-medium shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              Running
-            </button>
-            <button
-              onClick={() => setStateFilter('exited')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
-                stateFilter === 'exited'
-                  ? 'bg-slate-800 text-white font-medium shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Exited
-            </button>
-            <button
-              onClick={() => setStateFilter('paused')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
-                stateFilter === 'paused'
-                  ? 'bg-slate-800 text-white font-medium shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Paused
-            </button>
-          </div>
+          <FilterPills
+            value={stateFilter}
+            onChange={setStateFilter}
+            options={[
+              { value: 'all', label: 'All States' },
+              { value: 'running', label: 'Running', dotColor: 'bg-emerald-400' },
+              { value: 'exited', label: 'Exited' },
+              { value: 'paused', label: 'Paused' },
+            ]}
+          />
 
           {/* Type Filter Pills */}
-          <div className="flex items-center rounded-lg bg-slate-900 border border-slate-800 p-0.5 text-xs">
-            <button
-              onClick={() => setTypeFilter('all')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
-                typeFilter === 'all'
-                  ? 'bg-slate-800 text-white font-medium shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              All
-            </button>
-            <button
-              onClick={() => setTypeFilter('stack')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
-                typeFilter === 'stack'
-                  ? 'bg-slate-800 text-white font-medium shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              In Stack
-            </button>
-            <button
-              onClick={() => setTypeFilter('standalone')}
-              className={`px-2.5 py-1 rounded-md transition-all ${
-                typeFilter === 'standalone'
-                  ? 'bg-slate-800 text-white font-medium shadow-sm'
-                  : 'text-slate-400 hover:text-slate-200'
-              }`}
-            >
-              Standalone
-            </button>
-          </div>
-
-          {/* Local search if navbar search is empty */}
-          {!initialSearch && (
-            <div className="relative">
-              <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-1/2 -translate-y-1/2" />
-              <Input
-                value={localSearch}
-                onChange={(e) => setLocalSearch(e.target.value)}
-                placeholder="Filter containers…"
-                className="h-8 pl-8 pr-2.5 text-xs bg-slate-900 border-slate-800 w-36 sm:w-44 focus-visible:ring-1 focus-visible:ring-rose-500 text-slate-200"
-              />
-            </div>
-          )}
+          <FilterPills
+            value={typeFilter}
+            onChange={setTypeFilter}
+            options={[
+              { value: 'all', label: 'All' },
+              { value: 'stack', label: 'In Stack' },
+              { value: 'standalone', label: 'Standalone' },
+            ]}
+          />
         </div>
+
+        {/* Unreachable node footnote if any */}
+        {unreachableNodes.length > 0 && (
+          <div
+            className="flex items-center gap-1.5 text-[11px] text-amber-400/90 font-mono"
+            title={unreachableNodes.map((n) => `${n.name}: ${n.error || 'unreachable'}`).join('\n')}
+          >
+            <AlertTriangle className="w-3.5 h-3.5 text-amber-400 flex-shrink-0" />
+            <span>{unreachableNodes.length} node{unreachableNodes.length > 1 ? 's' : ''} unreachable</span>
+          </div>
+        )}
       </div>
 
       {error && (
@@ -407,9 +335,9 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                           e.stopPropagation();
                           setLogsForContainer(container);
                         }}
-                        className="h-6 px-2 text-[10px] text-indigo-400 hover:text-white hover:bg-indigo-600/20 border border-indigo-500/20 font-sans"
+                        className="h-6 px-2 text-[10px] text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/60 font-sans"
                       >
-                        <Terminal className="w-3 h-3 mr-1" />
+                        <Terminal className="w-3 h-3 mr-1 text-slate-400" />
                         Logs
                       </Button>
                       {isStandalone && !container.hostReadOnly && (
@@ -420,9 +348,9 @@ export const ClusterContainersView: React.FC<ClusterContainersViewProps> = ({
                             e.stopPropagation();
                             setGeneratingForContainer(container);
                           }}
-                          className="h-6 px-2 text-[10px] text-amber-400 hover:text-white hover:bg-amber-600/20 border border-amber-500/20 font-sans"
+                          className="h-6 px-2 text-[10px] text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-700/60 font-sans"
                         >
-                          <Sparkles className="w-3 h-3 mr-1" />
+                          <Sparkles className="w-3 h-3 mr-1 text-slate-400" />
                           Manage
                         </Button>
                       )}

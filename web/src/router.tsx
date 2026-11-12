@@ -9,6 +9,8 @@ import {
 } from '@tanstack/react-router';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { Navbar } from './components/Navbar';
+import { TreeSidebar } from './components/TreeSidebar';
+import { Sheet, SheetContent, SheetTitle } from './components/ui/sheet';
 import { ClusterStacksView } from './components/ClusterStacksView';
 import { ClusterContainersView } from './components/ClusterContainersView';
 import { ClusterNodesView } from './components/ClusterNodesView';
@@ -17,6 +19,8 @@ import { NodeStackDetailRouteComponent } from './pages/NodeStackDetailRouteCompo
 import { NodeContainerDetailRouteComponent } from './pages/NodeContainerDetailRouteComponent';
 import { useDocumentTitle } from './hooks/useDocumentTitle';
 import { useNodesQuery } from './hooks/useClusterData';
+import { BreadcrumbNav } from './components/BreadcrumbNav';
+import { Server, Layers, Box } from 'lucide-react';
 
 export interface ClusterUIContextType {
   selectedHostId: string | null;
@@ -47,6 +51,7 @@ function RootComponent() {
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
@@ -66,16 +71,34 @@ function RootComponent() {
       >
         <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-rose-500/20 selection:text-rose-300">
           <Navbar
-            selectedHostId={selectedHostId}
-            onSelectHostId={setSelectedHostId}
-            searchQuery={searchQuery}
-            onSearchChange={setSearchQuery}
             onRefresh={handleRefresh}
             isRefreshing={isRefreshing}
+            onToggleMobileSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+            isMobileSidebarOpen={mobileSidebarOpen}
           />
-          <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 py-6">
-            <Outlet />
-          </main>
+
+          {/* Main Layout: Sidebar + Route Workspace */}
+          <div className="flex-1 flex overflow-hidden">
+            {/* Desktop Tree Sidebar */}
+            <div className="hidden md:block flex-shrink-0">
+              <TreeSidebar />
+            </div>
+
+            {/* Mobile Sheet Tree Sidebar */}
+            <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+              <SheetContent side="left" className="p-0 w-72 bg-slate-950 border-r border-slate-800">
+                <SheetTitle className="sr-only">Navigation</SheetTitle>
+                <TreeSidebar onItemClick={() => setMobileSidebarOpen(false)} />
+              </SheetContent>
+            </Sheet>
+
+            {/* Main Content Workspace */}
+            <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 min-w-0">
+              <div className="max-w-7xl mx-auto">
+                <Outlet />
+              </div>
+            </main>
+          </div>
         </div>
       </ClusterUIContext.Provider>
     </QueryClientProvider>
@@ -202,6 +225,22 @@ function NodeStacksRouteComponent() {
 
   return (
     <div className="space-y-4">
+      {/* Top Breadcrumbs */}
+      <BreadcrumbNav
+        items={[
+          {
+            label: nodeLabel,
+            to: '/nodes/$nodeId',
+            params: { nodeId },
+            icon: Server,
+          },
+          {
+            label: 'Stacks',
+            icon: Layers,
+          },
+        ]}
+      />
+
       <ClusterStacksView selectedHostId={nodeId} searchQuery={searchQuery} />
     </div>
   );
@@ -231,6 +270,22 @@ function NodeContainersRouteComponent() {
 
   return (
     <div className="space-y-4">
+      {/* Top Breadcrumbs */}
+      <BreadcrumbNav
+        items={[
+          {
+            label: nodeLabel,
+            to: '/nodes/$nodeId',
+            params: { nodeId },
+            icon: Server,
+          },
+          {
+            label: 'Containers',
+            icon: Box,
+          },
+        ]}
+      />
+
       <ClusterContainersView selectedHostId={nodeId} searchQuery={searchQuery} />
     </div>
   );

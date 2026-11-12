@@ -7,6 +7,7 @@ import { useQuery } from '@tanstack/react-query';
 import { getNodeEndpoint, CLUSTER_NODE_TIMEOUT_MS } from '../hooks/useClusterData';
 import { Badge } from '../components/ui/badge';
 import { Button } from '../components/ui/button';
+import { BreadcrumbNav } from '../components/BreadcrumbNav';
 import {
   Server,
   Layers,
@@ -83,17 +84,19 @@ export const NodeDetailView: React.FC<NodeDetailViewProps> = ({ nodeId }) => {
 
   return (
     <div className="space-y-6">
-      {/* Breadcrumb & Navigation Header */}
+      {/* Top Breadcrumb */}
+      <BreadcrumbNav
+        items={[
+          {
+            label: node.name,
+            icon: Server,
+          },
+        ]}
+      />
+
+      {/* Navigation Header */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
         <div className="space-y-1">
-          <div className="flex items-center gap-2 text-xs text-slate-400">
-            <Link to="/nodes" className="hover:text-slate-200 transition-colors">
-              Nodes
-            </Link>
-            <span>/</span>
-            <span className="text-slate-200 font-mono">{node.name}</span>
-          </div>
-
           <div className="flex items-center gap-3 pt-1">
             <h1 className="text-xl font-bold text-white flex items-center gap-2">
               <Server className="w-6 h-6 text-emerald-400" />

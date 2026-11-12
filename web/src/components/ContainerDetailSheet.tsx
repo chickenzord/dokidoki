@@ -208,9 +208,9 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
             size="sm"
             variant="outline"
             onClick={() => setLogsOpen(true)}
-            className="h-7 text-xs bg-indigo-600/10 hover:bg-indigo-600 text-indigo-400 hover:text-white border-indigo-500/30 transition-colors"
+            className="h-7 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border-slate-700 transition-colors"
           >
-            <Terminal className="w-3.5 h-3.5 mr-1.5" />
+            <Terminal className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
             Logs
           </Button>
           {isStandalone ? (
@@ -219,15 +219,15 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
                 size="sm"
                 variant="outline"
                 onClick={() => setGenerateDialogOpen(true)}
-                className="h-7 text-xs bg-amber-600/10 hover:bg-amber-600 text-amber-400 hover:text-white border-amber-500/30 transition-colors"
+                className="h-7 text-xs bg-slate-800 hover:bg-slate-700 text-slate-200 hover:text-white border-slate-700 transition-colors"
               >
-                <Sparkles className="w-3.5 h-3.5 mr-1.5" />
+                <Sparkles className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
                 Manage as Stack
               </Button>
             )
           ) : (
-            <Badge variant="outline" className="text-xs bg-blue-950/40 text-blue-400 border-blue-800/60 font-mono flex items-center gap-1">
-              <Layers className="w-3 h-3" />
+            <Badge variant="outline" className="text-xs bg-slate-800/80 text-slate-300 border-slate-700 font-mono flex items-center gap-1">
+              <Layers className="w-3 h-3 text-slate-400" />
               {effectiveStackName || 'Stack'}
             </Badge>
           )}
@@ -343,7 +343,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
             {actionLoading === 'restart' ? (
               <Loader2 className="w-3.5 h-3.5 mr-1.5 animate-spin" />
             ) : (
-              <RotateCw className="w-3.5 h-3.5 mr-1.5 text-amber-400" />
+              <RotateCw className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
             )}
             Restart
           </Button>
@@ -355,7 +355,7 @@ export const ContainerDetailSheet: React.FC<ContainerDetailSheetProps> = ({
             onClick={handlePull}
             className="h-8 text-xs bg-slate-800/80 hover:bg-slate-700 text-slate-200 border-slate-700 transition-colors"
           >
-            <Download className="w-3.5 h-3.5 mr-1.5 text-blue-400" />
+            <Download className="w-3.5 h-3.5 mr-1.5 text-slate-400" />
             Pull Image
           </Button>
         </div>
