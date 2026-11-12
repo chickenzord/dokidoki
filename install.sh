@@ -491,7 +491,7 @@ services:
     network_mode: host
     volumes:
       - "${DOCKER_SOCKET}:/var/run/docker.sock"
-      - "${STACKS_DIR}:/opt/stacks"
+      - "${STACKS_DIR}:${STACKS_DIR}"
     environment:
 $(printf "%b" "$ENV_BLOCK")
 EOF
