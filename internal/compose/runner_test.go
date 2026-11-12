@@ -18,8 +18,8 @@ import (
 func TestNewRunner(t *testing.T) {
 	t.Run("default binary", func(t *testing.T) {
 		r := NewRunner("", "")
-		if r.bin != "docker compose" {
-			t.Errorf("expected bin 'docker compose', got %q", r.bin)
+		if r.bin != "docker-compose" {
+			t.Errorf("expected bin 'docker-compose', got %q", r.bin)
 		}
 		if r.dockerHost != "" {
 			t.Errorf("expected empty dockerHost, got %q", r.dockerHost)
@@ -103,11 +103,11 @@ func TestCommandArgumentParsing(t *testing.T) {
 			expectedArgs: []string{"docker", "compose", "-f", composePath, "pull"},
 		},
 		{
-			name:         "empty bin defaults to docker compose",
+			name:         "empty bin defaults to docker-compose",
 			bin:          "",
 			extraArgs:    []string{"up", "-d", "--remove-orphans"},
-			expectedCmd:  "docker",
-			expectedArgs: []string{"docker", "compose", "-f", composePath, "up", "-d", "--remove-orphans"},
+			expectedCmd:  "docker-compose",
+			expectedArgs: []string{"docker-compose", "-f", composePath, "up", "-d", "--remove-orphans"},
 		},
 	}
 

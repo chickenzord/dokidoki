@@ -16,7 +16,7 @@ import (
 )
 
 // DefaultBin is the default compose command binary used if none is specified.
-const DefaultBin = "docker compose"
+const DefaultBin = "docker-compose"
 
 // TerminalSize defines the pseudo-terminal window dimensions.
 type TerminalSize struct {

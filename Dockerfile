@@ -45,7 +45,17 @@ RUN CGO_ENABLED=0 go build \
 
 # Stage 3: Runner
 FROM alpine:3.21 AS runner
-RUN apk add --no-cache ca-certificates tzdata curl docker-cli docker-cli-compose
+RUN apk add --no-cache ca-certificates tzdata curl
+
+ARG TARGETARCH
+ARG COMPOSE_VERSION=v2.40.3
+RUN case "${TARGETARCH}" in \
+        "amd64") COMPOSE_ARCH="x86_64" ;; \
+        "arm64") COMPOSE_ARCH="aarch64" ;; \
+        *) COMPOSE_ARCH="${TARGETARCH}" ;; \
+    esac && \
+    curl -fsSL "https://github.com/docker/compose/releases/download/${COMPOSE_VERSION}/docker-compose-linux-${COMPOSE_ARCH}" -o /usr/local/bin/docker-compose && \
+    chmod +x /usr/local/bin/docker-compose
 
 WORKDIR /app
 
@@ -55,6 +65,7 @@ COPY --from=backend-builder /app/bin/dokidoki /usr/local/bin/dokidoki
 # Environment defaults
 ENV DOKIDOKI_PORT=8080
 ENV DOKIDOKI_STACKS_DIR=/opt/stacks
+ENV DOKIDOKI_DOCKER_COMPOSE_BIN=/usr/local/bin/docker-compose
 
 # Create default stacks directory
 RUN mkdir -p /opt/stacks

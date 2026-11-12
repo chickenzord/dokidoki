@@ -23,8 +23,18 @@ func TestDefaultConfig(t *testing.T) {
 	if cfg.DockerHost != "" {
 		t.Errorf("expected empty DockerHost, got %s", cfg.DockerHost)
 	}
-	if cfg.DockerComposeBin != "docker compose" {
-		t.Errorf("expected DockerComposeBin \"docker compose\", got %s", cfg.DockerComposeBin)
+	if cfg.DockerComposeBin != "docker-compose" {
+		t.Errorf("expected DockerComposeBin \"docker-compose\", got %s", cfg.DockerComposeBin)
+	}
+	if cfg.ComposeMode != "auto" {
+		t.Errorf("expected ComposeMode auto, got %s", cfg.ComposeMode)
+	}
+	if cfg.ComposeVersion != "auto" {
+		t.Errorf("expected ComposeVersion auto, got %s", cfg.ComposeVersion)
+	}
+	expectedCacheDir := "/opt/stacks/.dokidoki/bin"
+	if cfg.ComposeCacheDir != expectedCacheDir {
+		t.Errorf("expected ComposeCacheDir %s, got %s", expectedCacheDir, cfg.ComposeCacheDir)
 	}
 	if cfg.NodeID != "" {
 		t.Errorf("expected empty NodeID, got %s", cfg.NodeID)
@@ -65,6 +75,9 @@ func TestEnvOverride(t *testing.T) {
 		"DOKIDOKI_STACKS_DIR=/custom/stacks",
 		"DOCKER_HOST=tcp://1.2.3.4:2375",
 		"DOKIDOKI_DOCKER_COMPOSE_BIN=docker-compose",
+		"DOKIDOKI_COMPOSE_MODE=bundled",
+		"DOKIDOKI_COMPOSE_VERSION=v2.40.3",
+		"DOKIDOKI_COMPOSE_CACHE_DIR=/custom/bin",
 		"DOKIDOKI_NODE_ID=custom-node-id",
 		"DOKIDOKI_NODE_NAME=my-custom-node",
 		"DOKIDOKI_ADVERTISE_ADDR=http://10.0.0.1:8080, http://10.0.0.2:8080",
@@ -94,6 +107,15 @@ func TestEnvOverride(t *testing.T) {
 	}
 	if cfg.DockerComposeBin != "docker-compose" {
 		t.Errorf("expected DockerComposeBin docker-compose, got %s", cfg.DockerComposeBin)
+	}
+	if cfg.ComposeMode != "bundled" {
+		t.Errorf("expected ComposeMode bundled, got %s", cfg.ComposeMode)
+	}
+	if cfg.ComposeVersion != "v2.40.3" {
+		t.Errorf("expected ComposeVersion v2.40.3, got %s", cfg.ComposeVersion)
+	}
+	if cfg.ComposeCacheDir != "/custom/bin" {
+		t.Errorf("expected ComposeCacheDir /custom/bin, got %s", cfg.ComposeCacheDir)
 	}
 	if cfg.NodeID != "custom-node-id" {
 		t.Errorf("expected NodeID custom-node-id, got %s", cfg.NodeID)
@@ -145,6 +167,9 @@ func TestFlagsOverrideEnv(t *testing.T) {
 		"-stacks-dir=/flag/stacks",
 		"-docker-host=unix:///tmp/docker.sock",
 		"-docker-compose-bin=/usr/local/bin/docker-compose",
+		"-compose-mode=pinned",
+		"-compose-version=v2.30.0",
+		"-compose-cache-dir=/opt/my-cache/bin",
 		"-node-id=flag-node-id",
 		"-node-name=flag-node-name",
 		"-advertise-addr=http://flag-addr:8080,http://flag-addr-2:8080",
@@ -174,6 +199,15 @@ func TestFlagsOverrideEnv(t *testing.T) {
 	}
 	if cfg.DockerComposeBin != "/usr/local/bin/docker-compose" {
 		t.Errorf("expected DockerComposeBin /usr/local/bin/docker-compose, got %s", cfg.DockerComposeBin)
+	}
+	if cfg.ComposeMode != "pinned" {
+		t.Errorf("expected ComposeMode pinned, got %s", cfg.ComposeMode)
+	}
+	if cfg.ComposeVersion != "v2.30.0" {
+		t.Errorf("expected ComposeVersion v2.30.0, got %s", cfg.ComposeVersion)
+	}
+	if cfg.ComposeCacheDir != "/opt/my-cache/bin" {
+		t.Errorf("expected ComposeCacheDir /opt/my-cache/bin, got %s", cfg.ComposeCacheDir)
 	}
 	if cfg.NodeID != "flag-node-id" {
 		t.Errorf("expected NodeID flag-node-id, got %s", cfg.NodeID)

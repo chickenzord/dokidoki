@@ -96,6 +96,9 @@ func main() {
 		{Key: "Stacks Dir", Value: cfg.StacksDir},
 		{Key: "Docker Host", Value: dockerHostVal},
 		{Key: "Docker Compose Bin", Value: cfg.DockerComposeBin},
+		{Key: "Compose Mode", Value: cfg.ComposeMode},
+		{Key: "Compose Version", Value: cfg.ComposeVersion},
+		{Key: "Compose Cache Dir", Value: cfg.ComposeCacheDir},
 		{Key: "Cluster Token", Value: cfg.ClusterToken, Sensitive: true},
 		{Key: "mDNS Status", Value: mDNSVal},
 		{Key: "Read Only", Value: cfg.ReadOnly},
@@ -154,7 +157,24 @@ func main() {
 
 	// Initialize API Router and HTTP Server
 	scanner := stack.NewScanner(cfg.StacksDir)
-	composeRunner := compose.NewRunner(cfg.DockerComposeBin, cfg.DockerHost)
+	composeMgr := compose.NewManager(compose.ManagerConfig{
+		Bin:        cfg.DockerComposeBin,
+		DockerHost: cfg.DockerHost,
+		Mode:       cfg.ComposeMode,
+		Version:    cfg.ComposeVersion,
+		CacheDir:   cfg.ComposeCacheDir,
+	}, dockerCli)
+
+	// Pre-resolve compose binary asynchronously or on startup with timeout
+	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 15*time.Second)
+	resolvedBin, resolveErr := composeMgr.Resolve(resolveCtx)
+	resolveCancel()
+	if resolveErr != nil {
+		slog.Warn("Compose binary resolution warning", "error", resolveErr)
+	} else {
+		slog.Info("Docker Compose binary resolved", "bin", resolvedBin)
+	}
+	composeRunner := composeMgr.Runner()
 
 	var taskRunnerOpts []task.Option
 	if selfContainerID != "" && dockerCli != nil {

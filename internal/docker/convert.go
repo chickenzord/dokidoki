@@ -11,6 +11,7 @@ import (
 const (
 	ComposeProjectLabel = "com.docker.compose.project"
 	ComposeServiceLabel = "com.docker.compose.service"
+	ComposeVersionLabel = "com.docker.compose.version"
 )
 
 // IsSelfContainer returns true if containerID matches selfContainerID or matches prefix.

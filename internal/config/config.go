@@ -4,6 +4,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -12,7 +13,9 @@ const (
 	DefaultBind             = "0.0.0.0"
 	DefaultPort             = 8080
 	DefaultStacksDir        = "/opt/stacks"
-	DefaultDockerComposeBin = "docker compose"
+	DefaultDockerComposeBin = "docker-compose"
+	DefaultComposeMode      = "auto"
+	DefaultComposeVersion   = "auto"
 	DefaultNodeName         = "dokidoki-node"
 	DefaultLogLevel         = "info"
 	DefaultLogFormat        = "text"
@@ -25,6 +28,9 @@ type Config struct {
 	StacksDir        string
 	DockerHost       string
 	DockerComposeBin string
+	ComposeMode      string
+	ComposeVersion   string
+	ComposeCacheDir  string
 	NodeID           string
 	NodeName         string
 	AdvertiseAddrs   []string
@@ -53,6 +59,9 @@ func DefaultConfig() *Config {
 		Port:             DefaultPort,
 		StacksDir:        DefaultStacksDir,
 		DockerComposeBin: DefaultDockerComposeBin,
+		ComposeMode:      DefaultComposeMode,
+		ComposeVersion:   DefaultComposeVersion,
+		ComposeCacheDir:  filepath.Join(DefaultStacksDir, ".dokidoki", "bin"),
 		NodeName:         nodeName,
 		EnableMDNS:       true,
 		LogLevel:         DefaultLogLevel,
@@ -93,12 +102,22 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 	}
 	if val, ok := envMap["DOKIDOKI_STACKS_DIR"]; ok && val != "" {
 		cfg.StacksDir = val
+		cfg.ComposeCacheDir = filepath.Join(cfg.StacksDir, ".dokidoki", "bin")
 	}
 	if val, ok := envMap["DOCKER_HOST"]; ok && val != "" {
 		cfg.DockerHost = val
 	}
 	if val, ok := envMap["DOKIDOKI_DOCKER_COMPOSE_BIN"]; ok && strings.TrimSpace(val) != "" {
 		cfg.DockerComposeBin = strings.TrimSpace(val)
+	}
+	if val, ok := envMap["DOKIDOKI_COMPOSE_MODE"]; ok && strings.TrimSpace(val) != "" {
+		cfg.ComposeMode = strings.TrimSpace(val)
+	}
+	if val, ok := envMap["DOKIDOKI_COMPOSE_VERSION"]; ok && strings.TrimSpace(val) != "" {
+		cfg.ComposeVersion = strings.TrimSpace(val)
+	}
+	if val, ok := envMap["DOKIDOKI_COMPOSE_CACHE_DIR"]; ok && strings.TrimSpace(val) != "" {
+		cfg.ComposeCacheDir = strings.TrimSpace(val)
 	}
 	if val, ok := envMap["DOKIDOKI_NODE_ID"]; ok && val != "" {
 		cfg.NodeID = strings.TrimSpace(val)
@@ -153,6 +172,9 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 	fs.StringVar(&cfg.StacksDir, "stacks-dir", cfg.StacksDir, "Directory containing stack definitions")
 	fs.StringVar(&cfg.DockerHost, "docker-host", cfg.DockerHost, "Docker daemon host URL")
 	fs.StringVar(&cfg.DockerComposeBin, "docker-compose-bin", cfg.DockerComposeBin, "Docker compose binary or command")
+	fs.StringVar(&cfg.ComposeMode, "compose-mode", cfg.ComposeMode, "Compose binary resolution mode (auto, bundled, pinned)")
+	fs.StringVar(&cfg.ComposeVersion, "compose-version", cfg.ComposeVersion, "Compose version (auto or specific version)")
+	fs.StringVar(&cfg.ComposeCacheDir, "compose-cache-dir", cfg.ComposeCacheDir, "Directory to cache downloaded compose binaries")
 	fs.StringVar(&cfg.NodeID, "node-id", cfg.NodeID, "Node unique ID")
 	fs.StringVar(&cfg.NodeName, "node-name", cfg.NodeName, "Node human-readable name")
 
