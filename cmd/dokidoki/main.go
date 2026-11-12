@@ -158,12 +158,16 @@ func main() {
 	// Initialize API Router and HTTP Server
 	scanner := stack.NewScanner(cfg.StacksDir)
 	composeMgr := compose.NewManager(compose.ManagerConfig{
-		Bin:        cfg.DockerComposeBin,
-		DockerHost: cfg.DockerHost,
-		Mode:       cfg.ComposeMode,
-		Version:    cfg.ComposeVersion,
-		CacheDir:   cfg.ComposeCacheDir,
+		Bin:             cfg.DockerComposeBin,
+		DockerHost:      cfg.DockerHost,
+		Mode:            cfg.ComposeMode,
+		Version:         cfg.ComposeVersion,
+		CacheDir:        cfg.ComposeCacheDir,
+		SelfContainerID: selfContainerID,
 	}, dockerCli)
+
+	// Startup Pre-warm in non-blocking background goroutine
+	go composeMgr.Warmup(context.Background())
 
 	// Pre-resolve compose binary asynchronously or on startup with timeout
 	resolveCtx, resolveCancel := context.WithTimeout(context.Background(), 15*time.Second)

@@ -47,7 +47,7 @@ type Runner interface {
 	Pull(ctx context.Context, composePath string, out io.Writer) error
 }
 
-// CommandRunner executes compose commands via the CLI binary.
+// CommandRunner executes compose commands via a fixed CLI binary.
 type CommandRunner struct {
 	bin        string // e.g. "docker compose" or "docker-compose"
 	dockerHost string
@@ -59,7 +59,7 @@ type CommandRunner struct {
 var _ Runner = (*CommandRunner)(nil)
 
 // NewRunner creates a new CommandRunner instance.
-// If bin is empty, it defaults to "docker compose".
+// If bin is empty, it defaults to "docker-compose".
 func NewRunner(bin string, dockerHost string) *CommandRunner {
 	if bin == "" {
 		bin = DefaultBin
@@ -96,6 +96,10 @@ func (r *CommandRunner) buildCommand(ctx context.Context, composePath string, ex
 		bin = DefaultBin
 	}
 
+	return buildExecCommand(ctx, bin, r.dockerHost, composePath, extraArgs...)
+}
+
+func buildExecCommand(ctx context.Context, bin, dockerHost, composePath string, extraArgs ...string) *exec.Cmd {
 	parts := strings.Fields(bin)
 	if len(parts) == 0 {
 		parts = strings.Fields(DefaultBin)
@@ -113,17 +117,17 @@ func (r *CommandRunner) buildCommand(ctx context.Context, composePath string, ex
 	cmd.WaitDelay = 500 * time.Millisecond
 
 	env := os.Environ()
-	if r.dockerHost != "" {
+	if dockerHost != "" {
 		updated := false
 		for i, e := range env {
 			if strings.HasPrefix(e, "DOCKER_HOST=") {
-				env[i] = "DOCKER_HOST=" + r.dockerHost
+				env[i] = "DOCKER_HOST=" + dockerHost
 				updated = true
 				break
 			}
 		}
 		if !updated {
-			env = append(env, "DOCKER_HOST="+r.dockerHost)
+			env = append(env, "DOCKER_HOST="+dockerHost)
 		}
 	}
 	cmd.Env = env
@@ -139,7 +143,10 @@ func (r *CommandRunner) run(ctx context.Context, composePath string, out io.Writ
 	defer mu.Unlock()
 
 	cmd := r.buildCommand(ctx, composePath, extraArgs...)
+	return executeCommand(ctx, cmd, out)
+}
 
+func executeCommand(ctx context.Context, cmd *exec.Cmd, out io.Writer) error {
 	var buf bytes.Buffer
 	var writer io.Writer = &buf
 	if out != nil {
@@ -220,5 +227,77 @@ func (r *CommandRunner) Restart(ctx context.Context, composePath string, service
 
 // Pull runs `pull` on the specified compose file.
 func (r *CommandRunner) Pull(ctx context.Context, composePath string, out io.Writer) error {
+	return r.run(ctx, composePath, out, "pull")
+}
+
+// MultiVersionRunner dynamically resolves the compose binary per operation.
+type MultiVersionRunner struct {
+	mgr        *Manager
+	dockerHost string
+	locks      map[string]*sync.Mutex
+	locksMu    sync.Mutex
+}
+
+// Ensure MultiVersionRunner implements Runner at compile time.
+var _ Runner = (*MultiVersionRunner)(nil)
+
+// NewMultiVersionRunner creates a new MultiVersionRunner instance.
+func NewMultiVersionRunner(mgr *Manager, dockerHost string) *MultiVersionRunner {
+	return &MultiVersionRunner{
+		mgr:        mgr,
+		dockerHost: dockerHost,
+		locks:      make(map[string]*sync.Mutex),
+	}
+}
+
+func (r *MultiVersionRunner) getLock(composePath string) *sync.Mutex {
+	r.locksMu.Lock()
+	defer r.locksMu.Unlock()
+
+	if r.locks == nil {
+		r.locks = make(map[string]*sync.Mutex)
+	}
+
+	key := filepath.Clean(composePath)
+	mu, ok := r.locks[key]
+	if !ok {
+		mu = &sync.Mutex{}
+		r.locks[key] = mu
+	}
+	return mu
+}
+
+func (r *MultiVersionRunner) run(ctx context.Context, composePath string, out io.Writer, extraArgs ...string) error {
+	mu := r.getLock(composePath)
+	mu.Lock()
+	defer mu.Unlock()
+
+	bin := r.mgr.ResolveForStack(ctx, composePath, out)
+	cmd := buildExecCommand(ctx, bin, r.dockerHost, composePath, extraArgs...)
+	return executeCommand(ctx, cmd, out)
+}
+
+// Up runs `up -d --remove-orphans` dynamically resolving the compose binary.
+func (r *MultiVersionRunner) Up(ctx context.Context, composePath string, out io.Writer, extraArgs ...string) error {
+	args := append([]string{"up", "-d", "--remove-orphans"}, extraArgs...)
+	return r.run(ctx, composePath, out, args...)
+}
+
+// Down runs `down` dynamically resolving the compose binary.
+func (r *MultiVersionRunner) Down(ctx context.Context, composePath string, out io.Writer) error {
+	return r.run(ctx, composePath, out, "down")
+}
+
+// Restart runs `restart` dynamically resolving the compose binary.
+func (r *MultiVersionRunner) Restart(ctx context.Context, composePath string, service string, out io.Writer) error {
+	args := []string{"restart"}
+	if service != "" {
+		args = append(args, service)
+	}
+	return r.run(ctx, composePath, out, args...)
+}
+
+// Pull runs `pull` dynamically resolving the compose binary.
+func (r *MultiVersionRunner) Pull(ctx context.Context, composePath string, out io.Writer) error {
 	return r.run(ctx, composePath, out, "pull")
 }

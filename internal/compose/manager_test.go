@@ -1,13 +1,19 @@
 package compose
 
 import (
+	"bytes"
 	"context"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
@@ -18,6 +24,7 @@ import (
 
 type mockDockerForManager struct {
 	containers []types.Container
+	inspects   map[string]types.ContainerJSON
 }
 
 func (m *mockDockerForManager) Ping(ctx context.Context) (types.Ping, error) {
@@ -27,6 +34,11 @@ func (m *mockDockerForManager) ListContainers(ctx context.Context) ([]types.Cont
 	return m.containers, nil
 }
 func (m *mockDockerForManager) InspectContainer(ctx context.Context, id string) (types.ContainerJSON, error) {
+	if m.inspects != nil {
+		if c, ok := m.inspects[id]; ok {
+			return c, nil
+		}
+	}
 	return types.ContainerJSON{}, nil
 }
 func (m *mockDockerForManager) RestartContainer(ctx context.Context, id string, timeout *int) error {
@@ -278,4 +290,313 @@ func TestManagerResolve(t *testing.T) {
 			t.Fatal("expected non-nil Runner")
 		}
 	})
+}
+
+func TestSemverUtils(t *testing.T) {
+	if CompareSemver("2.20.0", "v2.40.3") >= 0 {
+		t.Errorf("expected 2.20.0 < v2.40.3")
+	}
+	if CompareSemver("v2.40.3", "v2.4.0") <= 0 {
+		t.Errorf("expected v2.40.3 > v2.4.0")
+	}
+	if CompareSemver("v2.40.3", "2.40.3") != 0 {
+		t.Errorf("expected v2.40.3 == 2.40.3")
+	}
+	if CompareSemver("v2.40.3", "v2.40.3-rc1") <= 0 {
+		t.Errorf("expected release > rc")
+	}
+	if CompareSemver("invalid", "v2.40.3") >= 0 {
+		t.Errorf("expected invalid < valid semver")
+	}
+}
+
+func TestInferProjectName(t *testing.T) {
+	tmpDir := t.TempDir()
+	stackDir := filepath.Join(tmpDir, "my-stack")
+	if err := os.MkdirAll(stackDir, 0755); err != nil {
+		t.Fatalf("failed to create dir: %v", err)
+	}
+
+	// 1. Inferred from dir
+	composePath1 := filepath.Join(stackDir, "compose.yaml")
+	if err := os.WriteFile(composePath1, []byte("services:\n  app:\n    image: alpine\n"), 0644); err != nil {
+		t.Fatalf("failed to write compose: %v", err)
+	}
+	if name := InferProjectName(composePath1); name != "my-stack" {
+		t.Errorf("expected my-stack, got %s", name)
+	}
+
+	// 2. Inferred from compose name attribute
+	composePath2 := filepath.Join(stackDir, "custom.yaml")
+	if err := os.WriteFile(composePath2, []byte("name: custom-project\nservices:\n  app:\n    image: alpine\n"), 0644); err != nil {
+		t.Fatalf("failed to write compose: %v", err)
+	}
+	if name := InferProjectName(composePath2); name != "custom-project" {
+		t.Errorf("expected custom-project, got %s", name)
+	}
+
+	// Empty path
+	if name := InferProjectName(""); name != "" {
+		t.Errorf("expected empty name for empty path, got %s", name)
+	}
+}
+
+func TestTargetVersionSelectionSteps(t *testing.T) {
+	cacheDir := t.TempDir()
+	bin220 := filepath.Join(cacheDir, "docker-compose-v2.20.0")
+	_ = os.WriteFile(bin220, []byte("#!/bin/sh\n"), 0755)
+	bin230 := filepath.Join(cacheDir, "docker-compose-v2.30.0")
+	_ = os.WriteFile(bin230, []byte("#!/bin/sh\n"), 0755)
+	bin240 := filepath.Join(cacheDir, "docker-compose-v2.40.0")
+	_ = os.WriteFile(bin240, []byte("#!/bin/sh\n"), 0755)
+
+	t.Run("Step 1: stack containers match returns highest version among stack containers", func(t *testing.T) {
+		mockDocker := &mockDockerForManager{
+			containers: []types.Container{
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "stack-a",
+						"com.docker.compose.version": "2.20.0",
+					},
+				},
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "stack-a",
+						"com.docker.compose.version": "v2.30.0",
+					},
+				},
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "other-stack",
+						"com.docker.compose.version": "v2.40.0",
+					},
+				},
+			},
+		}
+
+		mgr := NewManager(ManagerConfig{
+			Bin:      "docker-compose",
+			Mode:     "auto",
+			CacheDir: cacheDir,
+		}, mockDocker)
+
+		composePath := "/opt/stacks/stack-a/compose.yaml"
+		bin := mgr.ResolveForStack(context.Background(), composePath, nil)
+		if bin != bin230 {
+			t.Errorf("expected stack-a highest version %s, got %s", bin230, bin)
+		}
+	})
+
+	t.Run("Step 2: no stack containers, uses self container version", func(t *testing.T) {
+		mockDocker := &mockDockerForManager{
+			containers: []types.Container{
+				{
+					ID: "dokidoki-self-id",
+					Labels: map[string]string{
+						"com.docker.compose.version": "v2.30.0",
+					},
+				},
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "other-stack",
+						"com.docker.compose.version": "v2.40.0",
+					},
+				},
+			},
+			inspects: map[string]types.ContainerJSON{
+				"dokidoki-self-id": {
+					ContainerJSONBase: &types.ContainerJSONBase{ID: "dokidoki-self-id"},
+					Config: &container.Config{
+						Labels: map[string]string{
+							"com.docker.compose.version": "v2.30.0",
+						},
+					},
+				},
+			},
+		}
+
+		mgr := NewManager(ManagerConfig{
+			Bin:             "docker-compose",
+			Mode:            "auto",
+			CacheDir:        cacheDir,
+			SelfContainerID: "dokidoki-self-id",
+		}, mockDocker)
+
+		composePath := "/opt/stacks/new-stack/compose.yaml"
+		bin := mgr.ResolveForStack(context.Background(), composePath, nil)
+		if bin != bin230 {
+			t.Errorf("expected self-container version %s, got %s", bin230, bin)
+		}
+	})
+
+	t.Run("Step 3: no stack containers, no self container, uses highest semver across all host containers", func(t *testing.T) {
+		mockDocker := &mockDockerForManager{
+			containers: []types.Container{
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "some-stack",
+						"com.docker.compose.version": "2.20.0",
+					},
+				},
+				{
+					Labels: map[string]string{
+						"com.docker.compose.project": "other-stack",
+						"com.docker.compose.version": "v2.40.0",
+					},
+				},
+			},
+		}
+
+		mgr := NewManager(ManagerConfig{
+			Bin:      "docker-compose",
+			Mode:     "auto",
+			CacheDir: cacheDir,
+		}, mockDocker)
+
+		composePath := "/opt/stacks/brand-new-stack/compose.yaml"
+		bin := mgr.ResolveForStack(context.Background(), composePath, nil)
+		if bin != bin240 {
+			t.Errorf("expected host-wide highest version %s, got %s", bin240, bin)
+		}
+	})
+
+	t.Run("Step 4: no containers at all, falls back to bundled binary", func(t *testing.T) {
+		mockDocker := &mockDockerForManager{
+			containers: []types.Container{},
+		}
+
+		mgr := NewManager(ManagerConfig{
+			Bin:      "docker-compose",
+			Mode:     "auto",
+			CacheDir: cacheDir,
+		}, mockDocker)
+
+		composePath := "/opt/stacks/empty-host/compose.yaml"
+		bin := mgr.ResolveForStack(context.Background(), composePath, nil)
+		if bin != "docker-compose" {
+			t.Errorf("expected bundled fallback docker-compose, got %s", bin)
+		}
+	})
+}
+
+func TestWarmup(t *testing.T) {
+	cacheDir := t.TempDir()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("#!/bin/sh\n"))
+	}))
+	defer server.Close()
+
+	mockDocker := &mockDockerForManager{
+		containers: []types.Container{
+			{
+				Labels: map[string]string{
+					"com.docker.compose.version": "v2.31.0",
+				},
+			},
+			{
+				Labels: map[string]string{
+					"com.docker.compose.version": "v2.32.0",
+				},
+			},
+		},
+		inspects: map[string]types.ContainerJSON{
+			"self-id": {
+				Config: &container.Config{
+					Labels: map[string]string{
+						"com.docker.compose.version": "v2.33.0",
+					},
+				},
+			},
+		},
+	}
+
+	mgr := NewManager(ManagerConfig{
+		Bin:             "docker-compose",
+		Mode:            "auto",
+		CacheDir:        cacheDir,
+		SelfContainerID: "self-id",
+	}, mockDocker)
+	mgr.httpClient = server.Client()
+	mgr.downloadURLFunc = func(tag string, goos, goarch string) string {
+		return server.URL
+	}
+
+	mgr.Warmup(context.Background())
+
+	for _, v := range []string{"v2.31.0", "v2.32.0", "v2.33.0"} {
+		expectedFile := filepath.Join(cacheDir, fmt.Sprintf("docker-compose-%s", v))
+		if _, err := os.Stat(expectedFile); err != nil {
+			t.Errorf("expected %s to be downloaded by Warmup: %v", expectedFile, err)
+		}
+	}
+}
+
+func TestProgressVisibilityAndSingleflight(t *testing.T) {
+	cacheDir := t.TempDir()
+	var downloadCount int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		atomic.AddInt32(&downloadCount, 1)
+		time.Sleep(50 * time.Millisecond)
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("#!/bin/sh\n"))
+	}))
+	defer server.Close()
+
+	mgr := NewManager(ManagerConfig{
+		Bin:      "docker-compose",
+		Mode:     "auto",
+		CacheDir: cacheDir,
+	}, nil)
+	mgr.httpClient = server.Client()
+	mgr.downloadURLFunc = func(tag string, goos, goarch string) string {
+		return server.URL
+	}
+
+	// 1. Progress visibility
+	var out bytes.Buffer
+	bin, err := mgr.ensureComposeVersion(context.Background(), "v2.38.0", "docker-compose", &out)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	expectedBin := filepath.Join(cacheDir, "docker-compose-v2.38.0")
+	if bin != expectedBin {
+		t.Errorf("expected %s, got %s", expectedBin, bin)
+	}
+	if !strings.Contains(out.String(), "[dokidoki] Preparing Docker Compose v2.38.0...") {
+		t.Errorf("expected progress message, got %q", out.String())
+	}
+
+	// 2. Dedup concurrent downloads
+	targetVer := "v2.39.0"
+	var wg sync.WaitGroup
+	concurrentWorkers := 5
+	errs := make([]error, concurrentWorkers)
+	bins := make([]string, concurrentWorkers)
+
+	for i := 0; i < concurrentWorkers; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			var buf bytes.Buffer
+			b, e := mgr.ensureComposeVersion(context.Background(), targetVer, "docker-compose", &buf)
+			bins[idx] = b
+			errs[idx] = e
+		}(i)
+	}
+	wg.Wait()
+
+	for i := 0; i < concurrentWorkers; i++ {
+		if errs[i] != nil {
+			t.Errorf("worker %d returned error: %v", i, errs[i])
+		}
+		if bins[i] != filepath.Join(cacheDir, "docker-compose-v2.39.0") {
+			t.Errorf("worker %d returned unexpected bin: %s", i, bins[i])
+		}
+	}
+
+	// Download count should be 2 total (one for v2.38.0 and one for v2.39.0 despite 5 workers)
+	if atomic.LoadInt32(&downloadCount) != 2 {
+		t.Errorf("expected downloadCount 2, got %d", downloadCount)
+	}
 }

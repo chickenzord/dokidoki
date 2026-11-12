@@ -13,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/docker/docker/api/types"
 )
 
 func TestNewRunner(t *testing.T) {
@@ -571,4 +573,115 @@ func (s *syncBuffer) String() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.buf.String()
+}
+
+func TestMultiVersionRunner(t *testing.T) {
+	cacheDir := t.TempDir()
+
+	// Create fake compose binaries that echo their path and args
+	fakeComposeA := filepath.Join(cacheDir, "docker-compose-v2.20.0")
+	scriptA := "#!/bin/sh\necho \"COMPOSE_A: $*\"\n"
+	if err := os.WriteFile(fakeComposeA, []byte(scriptA), 0755); err != nil {
+		t.Fatalf("failed to write fake compose A: %v", err)
+	}
+
+	fakeComposeB := filepath.Join(cacheDir, "docker-compose-v2.30.0")
+	scriptB := "#!/bin/sh\necho \"COMPOSE_B: $*\"\n"
+	if err := os.WriteFile(fakeComposeB, []byte(scriptB), 0755); err != nil {
+		t.Fatalf("failed to write fake compose B: %v", err)
+	}
+
+	mockDocker := &mockDockerForManager{
+		containers: []types.Container{
+			{
+				Labels: map[string]string{
+					"com.docker.compose.project": "stack-a",
+					"com.docker.compose.version": "v2.20.0",
+				},
+			},
+			{
+				Labels: map[string]string{
+					"com.docker.compose.project": "stack-b",
+					"com.docker.compose.version": "v2.30.0",
+				},
+			},
+		},
+	}
+
+	mgr := NewManager(ManagerConfig{
+		Bin:      "docker-compose",
+		Mode:     "auto",
+		CacheDir: cacheDir,
+	}, mockDocker)
+
+	runner := mgr.Runner()
+	if runner == nil {
+		t.Fatal("expected non-nil Runner from manager")
+	}
+
+	composeDirA := filepath.Join(t.TempDir(), "stack-a")
+	_ = os.MkdirAll(composeDirA, 0755)
+	composePathA := filepath.Join(composeDirA, "compose.yaml")
+	_ = os.WriteFile(composePathA, []byte("services:\n  app:\n    image: alpine\n"), 0644)
+
+	composeDirB := filepath.Join(t.TempDir(), "stack-b")
+	_ = os.MkdirAll(composeDirB, 0755)
+	composePathB := filepath.Join(composeDirB, "compose.yaml")
+	_ = os.WriteFile(composePathB, []byte("services:\n  app:\n    image: alpine\n"), 0644)
+
+	t.Run("Up dynamically picks stack-a binary", func(t *testing.T) {
+		var out bytes.Buffer
+		err := runner.Up(context.Background(), composePathA, &out)
+		if err != nil {
+			t.Fatalf("Up failed: %v", err)
+		}
+		if !strings.Contains(out.String(), "COMPOSE_A:") {
+			t.Errorf("expected output to contain COMPOSE_A, got: %s", out.String())
+		}
+		if !strings.Contains(out.String(), "up -d --remove-orphans") {
+			t.Errorf("expected output to contain up flags, got: %s", out.String())
+		}
+	})
+
+	t.Run("Restart dynamically picks stack-b binary", func(t *testing.T) {
+		var out bytes.Buffer
+		err := runner.Restart(context.Background(), composePathB, "web", &out)
+		if err != nil {
+			t.Fatalf("Restart failed: %v", err)
+		}
+		if !strings.Contains(out.String(), "COMPOSE_B:") {
+			t.Errorf("expected output to contain COMPOSE_B, got: %s", out.String())
+		}
+		if !strings.Contains(out.String(), "restart web") {
+			t.Errorf("expected output to contain restart web, got: %s", out.String())
+		}
+	})
+
+	t.Run("Down dynamically picks stack-a binary", func(t *testing.T) {
+		var out bytes.Buffer
+		err := runner.Down(context.Background(), composePathA, &out)
+		if err != nil {
+			t.Fatalf("Down failed: %v", err)
+		}
+		if !strings.Contains(out.String(), "COMPOSE_A:") {
+			t.Errorf("expected output to contain COMPOSE_A, got: %s", out.String())
+		}
+		if !strings.Contains(out.String(), "down") {
+			t.Errorf("expected output to contain down, got: %s", out.String())
+		}
+	})
+
+	t.Run("Pull dynamically picks stack-b binary", func(t *testing.T) {
+		var out bytes.Buffer
+		err := runner.Pull(context.Background(), composePathB, &out)
+		if err != nil {
+			t.Fatalf("Pull failed: %v", err)
+		}
+		if !strings.Contains(out.String(), "COMPOSE_B:") {
+			t.Errorf("expected output to contain COMPOSE_B, got: %s", out.String())
+		}
+		if !strings.Contains(out.String(), "pull") {
+			t.Errorf("expected output to contain pull, got: %s", out.String())
+		}
+	})
 }
