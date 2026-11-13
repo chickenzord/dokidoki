@@ -119,6 +119,14 @@ func (s *Server) Routes() http.Handler {
 			r.Get("/containers/{id}", s.handleInspectContainer)
 			r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
 
+			// Docker engine resources (Networks, Volumes, Images)
+			r.Get("/networks", s.handleListNetworks)
+			r.Get("/networks/{id}", s.handleGetNetwork)
+			r.Get("/volumes", s.handleListVolumes)
+			r.Get("/volumes/{id}", s.handleGetVolume)
+			r.Get("/images", s.handleListImages)
+			r.Get("/images/{id}", s.handleGetImage)
+
 			// Tasks routes (metadata)
 			r.Get("/tasks", s.handleListTasks)
 			r.Get("/tasks/{id}", s.handleGetTask)
@@ -160,12 +168,27 @@ func (s *Server) Routes() http.Handler {
 			r.Post("/containers/{id}/pull", s.handlePullContainer)
 		})
 
-		// Long-lived streaming log routes (SSE / plain text follow)
+		// Long-lived streaming log and event routes (SSE / plain text follow)
 		r.Get("/containers/{id}/logs", s.handleContainerLogs)
 		r.Get("/tasks/{id}/logs", s.handleTaskLogs)
+		r.Get("/events", s.handleDockerEvents)
 
 		// Cluster proxy route (can proxy streaming requests to worker nodes)
 		r.HandleFunc("/nodes/{id}/proxy/*", s.handleProxyNode)
+	})
+
+	// Mount resource routes directly under /api for convenience / compatibility
+	r.Route("/api", func(r chi.Router) {
+		r.Group(func(r chi.Router) {
+			r.Use(chiMiddleware.Timeout(DefaultRequestTimeout))
+			r.Get("/networks", s.handleListNetworks)
+			r.Get("/networks/{id}", s.handleGetNetwork)
+			r.Get("/volumes", s.handleListVolumes)
+			r.Get("/volumes/{id}", s.handleGetVolume)
+			r.Get("/images", s.handleListImages)
+			r.Get("/images/{id}", s.handleGetImage)
+		})
+		r.Get("/events", s.handleDockerEvents)
 	})
 
 	// Mount embedded Web UI handler for SPA routing with client-side fallback

@@ -9,8 +9,11 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
 
@@ -47,6 +50,13 @@ type MockClient struct {
 	ContainerLogsFunc    func(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
 	RemoveContainerFunc  func(ctx context.Context, id string, options container.RemoveOptions) error
 	PullImageFunc        func(ctx context.Context, imageRef string) (io.ReadCloser, error)
+	NetworkListFunc      func(ctx context.Context, options network.ListOptions) ([]network.Inspect, error)
+	NetworkInspectFunc   func(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error)
+	VolumeListFunc       func(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error)
+	VolumeInspectFunc    func(ctx context.Context, volumeID string) (volume.Volume, error)
+	ImageListFunc        func(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
+	ImageInspectFunc     func(ctx context.Context, imageID string) (types.ImageInspect, error)
+	EventsFunc           func(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
 	ServerVersionFunc    func(ctx context.Context) (types.Version, error)
 	InfoFunc             func(ctx context.Context) (system.Info, error)
 	CloseFunc            func() error
@@ -130,6 +140,59 @@ func (m *MockClient) PullImage(ctx context.Context, imageRef string) (io.ReadClo
 		return m.PullImageFunc(ctx, imageRef)
 	}
 	return nil, nil
+}
+
+func (m *MockClient) NetworkList(ctx context.Context, options network.ListOptions) ([]network.Inspect, error) {
+	if m.NetworkListFunc != nil {
+		return m.NetworkListFunc(ctx, options)
+	}
+	return nil, nil
+}
+
+func (m *MockClient) NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error) {
+	if m.NetworkInspectFunc != nil {
+		return m.NetworkInspectFunc(ctx, networkID, options)
+	}
+	return network.Inspect{}, nil
+}
+
+func (m *MockClient) VolumeList(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+	if m.VolumeListFunc != nil {
+		return m.VolumeListFunc(ctx, options)
+	}
+	return volume.ListResponse{}, nil
+}
+
+func (m *MockClient) VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error) {
+	if m.VolumeInspectFunc != nil {
+		return m.VolumeInspectFunc(ctx, volumeID)
+	}
+	return volume.Volume{}, nil
+}
+
+func (m *MockClient) ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+	if m.ImageListFunc != nil {
+		return m.ImageListFunc(ctx, options)
+	}
+	return nil, nil
+}
+
+func (m *MockClient) ImageInspect(ctx context.Context, imageID string) (types.ImageInspect, error) {
+	if m.ImageInspectFunc != nil {
+		return m.ImageInspectFunc(ctx, imageID)
+	}
+	return types.ImageInspect{}, nil
+}
+
+func (m *MockClient) Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
+	if m.EventsFunc != nil {
+		return m.EventsFunc(ctx, options)
+	}
+	msgCh := make(chan events.Message)
+	errCh := make(chan error)
+	close(msgCh)
+	close(errCh)
+	return msgCh, errCh
 }
 
 func (m *MockClient) ServerVersion(ctx context.Context) (types.Version, error) {
@@ -355,6 +418,108 @@ func TestMockClient_ContainerAndImageMethods(t *testing.T) {
 		err := mock.RemoveContainer(ctx, "c1", container.RemoveOptions{Force: true})
 		if !called || err != nil {
 			t.Errorf("expected successful RemoveContainerFunc call, got %v", err)
+		}
+	})
+
+	t.Run("NetworkMethods", func(t *testing.T) {
+		mock := &MockClient{}
+		nets, err := mock.NetworkList(ctx, network.ListOptions{})
+		if err != nil || nets != nil {
+			t.Fatalf("expected nil list and nil error, got %v, %v", nets, err)
+		}
+		netInspect, err := mock.NetworkInspect(ctx, "net1", network.InspectOptions{})
+		if err != nil || netInspect.ID != "" {
+			t.Fatalf("expected empty net and nil error, got %v, %v", netInspect, err)
+		}
+
+		mock.NetworkListFunc = func(c context.Context, options network.ListOptions) ([]network.Inspect, error) {
+			return []network.Inspect{{ID: "net-123", Name: "my-net"}}, nil
+		}
+		mock.NetworkInspectFunc = func(c context.Context, networkID string, options network.InspectOptions) (network.Inspect, error) {
+			return network.Inspect{ID: networkID, Name: "my-net"}, nil
+		}
+
+		list, err := mock.NetworkList(ctx, network.ListOptions{})
+		if err != nil || len(list) != 1 || list[0].ID != "net-123" {
+			t.Errorf("unexpected list: %v, %v", list, err)
+		}
+		item, err := mock.NetworkInspect(ctx, "net-123", network.InspectOptions{})
+		if err != nil || item.ID != "net-123" {
+			t.Errorf("unexpected item: %v, %v", item, err)
+		}
+	})
+
+	t.Run("VolumeMethods", func(t *testing.T) {
+		mock := &MockClient{}
+		vols, err := mock.VolumeList(ctx, volume.ListOptions{})
+		if err != nil || vols.Volumes != nil {
+			t.Fatalf("expected nil vols and nil error, got %v, %v", vols, err)
+		}
+		volInspect, err := mock.VolumeInspect(ctx, "vol1")
+		if err != nil || volInspect.Name != "" {
+			t.Fatalf("expected empty vol and nil error, got %v, %v", volInspect, err)
+		}
+
+		mock.VolumeListFunc = func(c context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+			return volume.ListResponse{Volumes: []*volume.Volume{{Name: "vol-123"}}}, nil
+		}
+		mock.VolumeInspectFunc = func(c context.Context, volumeID string) (volume.Volume, error) {
+			return volume.Volume{Name: volumeID}, nil
+		}
+
+		list, err := mock.VolumeList(ctx, volume.ListOptions{})
+		if err != nil || len(list.Volumes) != 1 || list.Volumes[0].Name != "vol-123" {
+			t.Errorf("unexpected list: %v, %v", list, err)
+		}
+		item, err := mock.VolumeInspect(ctx, "vol-123")
+		if err != nil || item.Name != "vol-123" {
+			t.Errorf("unexpected item: %v, %v", item, err)
+		}
+	})
+
+	t.Run("ImageMethods", func(t *testing.T) {
+		mock := &MockClient{}
+		imgs, err := mock.ImageList(ctx, image.ListOptions{})
+		if err != nil || imgs != nil {
+			t.Fatalf("expected nil imgs and nil error, got %v, %v", imgs, err)
+		}
+		imgInspect, err := mock.ImageInspect(ctx, "img1")
+		if err != nil || imgInspect.ID != "" {
+			t.Fatalf("expected empty img and nil error, got %v, %v", imgInspect, err)
+		}
+
+		mock.ImageListFunc = func(c context.Context, options image.ListOptions) ([]image.Summary, error) {
+			return []image.Summary{{ID: "img-123"}}, nil
+		}
+		mock.ImageInspectFunc = func(c context.Context, imageID string) (types.ImageInspect, error) {
+			return types.ImageInspect{ID: imageID}, nil
+		}
+
+		list, err := mock.ImageList(ctx, image.ListOptions{})
+		if err != nil || len(list) != 1 || list[0].ID != "img-123" {
+			t.Errorf("unexpected list: %v, %v", list, err)
+		}
+		item, err := mock.ImageInspect(ctx, "img-123")
+		if err != nil || item.ID != "img-123" {
+			t.Errorf("unexpected item: %v, %v", item, err)
+		}
+	})
+
+	t.Run("EventsMethod", func(t *testing.T) {
+		mock := &MockClient{}
+		msgCh, errCh := mock.Events(ctx, events.ListOptions{})
+		if msgCh == nil || errCh == nil {
+			t.Fatal("expected non-nil channels")
+		}
+
+		customMsgCh := make(chan events.Message, 1)
+		customErrCh := make(chan error, 1)
+		mock.EventsFunc = func(c context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
+			return customMsgCh, customErrCh
+		}
+		mCh, eCh := mock.Events(ctx, events.ListOptions{})
+		if mCh != customMsgCh || eCh != customErrCh {
+			t.Errorf("expected custom channels returned")
 		}
 	})
 }

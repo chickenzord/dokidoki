@@ -11,6 +11,9 @@ import {
   ContainerComposeResponse,
   EnrichedContainerInspect,
   OperationResult,
+  DockerNetwork,
+  DockerVolume,
+  DockerImage,
 } from '../types';
 
 export interface RequestOptions extends RequestInit {
@@ -360,6 +363,42 @@ class ApiService {
 
     const path = `/api/v1/containers/${encodeURIComponent(id)}/logs?${searchParams.toString()}`;
     return this.resolveUrl(path, customEndpoint);
+  }
+
+  // --- Networks ---
+  public async getNetworks(customEndpoint?: string, options?: RequestOptions): Promise<DockerNetwork[]> {
+    return this.request<DockerNetwork[]>('/api/v1/networks', { method: 'GET', ...options }, customEndpoint);
+  }
+
+  public async getNetwork(id: string, customEndpoint?: string, options?: RequestOptions): Promise<DockerNetwork> {
+    return this.request<DockerNetwork>(`/api/v1/networks/${encodeURIComponent(id)}`, { method: 'GET', ...options }, customEndpoint);
+  }
+
+  // --- Volumes ---
+  public async getVolumes(customEndpoint?: string, options?: RequestOptions): Promise<DockerVolume[]> {
+    const res = await this.request<any>('/api/v1/volumes', { method: 'GET', ...options }, customEndpoint);
+    if (Array.isArray(res)) return res;
+    if (res && Array.isArray(res.Volumes)) return res.Volumes;
+    return [];
+  }
+
+  public async getVolume(name: string, customEndpoint?: string, options?: RequestOptions): Promise<DockerVolume> {
+    return this.request<DockerVolume>(`/api/v1/volumes/${encodeURIComponent(name)}`, { method: 'GET', ...options }, customEndpoint);
+  }
+
+  // --- Images ---
+  public async getImages(customEndpoint?: string, options?: RequestOptions): Promise<DockerImage[]> {
+    return this.request<DockerImage[]>('/api/v1/images', { method: 'GET', ...options }, customEndpoint);
+  }
+
+  public async getImage(id: string, customEndpoint?: string, options?: RequestOptions): Promise<any> {
+    return this.request<any>(`/api/v1/images/${encodeURIComponent(id)}`, { method: 'GET', ...options }, customEndpoint);
+  }
+
+  // --- Events ---
+  public getEventsEventSource(customEndpoint?: string): EventSource {
+    const url = this.resolveUrl('/api/v1/events', customEndpoint);
+    return new EventSource(url);
   }
 }
 

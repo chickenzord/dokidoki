@@ -15,8 +15,11 @@ import (
 	"github.com/chickenzord/dokidoki/internal/task"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 	errdefs "github.com/docker/docker/errdefs"
 	"github.com/docker/go-connections/nat"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
@@ -779,6 +782,38 @@ func (m *mockDockerClient) RemoveContainer(ctx context.Context, id string, optio
 
 func (m *mockDockerClient) PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("pulled")), nil
+}
+
+func (m *mockDockerClient) NetworkList(ctx context.Context, options network.ListOptions) ([]network.Inspect, error) {
+	return nil, nil
+}
+
+func (m *mockDockerClient) NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error) {
+	return network.Inspect{}, nil
+}
+
+func (m *mockDockerClient) VolumeList(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+	return volume.ListResponse{}, nil
+}
+
+func (m *mockDockerClient) VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error) {
+	return volume.Volume{}, nil
+}
+
+func (m *mockDockerClient) ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+	return nil, nil
+}
+
+func (m *mockDockerClient) ImageInspect(ctx context.Context, imageID string) (types.ImageInspect, error) {
+	return types.ImageInspect{}, nil
+}
+
+func (m *mockDockerClient) Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
+	msgCh := make(chan events.Message)
+	errCh := make(chan error)
+	close(msgCh)
+	close(errCh)
+	return msgCh, errCh
 }
 
 func (m *mockDockerClient) Close() error {

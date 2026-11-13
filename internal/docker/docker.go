@@ -6,9 +6,11 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
 	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -26,6 +28,13 @@ type Client interface {
 	ContainerLogs(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
 	RemoveContainer(ctx context.Context, id string, options container.RemoveOptions) error
 	PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error)
+	NetworkList(ctx context.Context, options network.ListOptions) ([]network.Inspect, error)
+	NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error)
+	VolumeList(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error)
+	VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error)
+	ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
+	ImageInspect(ctx context.Context, imageID string) (types.ImageInspect, error)
+	Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
 	ServerVersion(ctx context.Context) (types.Version, error)
 	Info(ctx context.Context) (system.Info, error)
 	Close() error
@@ -118,6 +127,42 @@ func (c *ClientWrapper) RemoveContainer(ctx context.Context, id string, options 
 // PullImage requests the docker host to pull an image from a remote registry.
 func (c *ClientWrapper) PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error) {
 	return c.cli.ImagePull(ctx, imageRef, image.PullOptions{})
+}
+
+// NetworkList returns a list of networks.
+func (c *ClientWrapper) NetworkList(ctx context.Context, options network.ListOptions) ([]network.Inspect, error) {
+	return c.cli.NetworkList(ctx, options)
+}
+
+// NetworkInspect returns information about a network.
+func (c *ClientWrapper) NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error) {
+	return c.cli.NetworkInspect(ctx, networkID, options)
+}
+
+// VolumeList returns a list of volumes.
+func (c *ClientWrapper) VolumeList(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+	return c.cli.VolumeList(ctx, options)
+}
+
+// VolumeInspect returns information about a volume.
+func (c *ClientWrapper) VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error) {
+	return c.cli.VolumeInspect(ctx, volumeID)
+}
+
+// ImageList returns a list of images.
+func (c *ClientWrapper) ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+	return c.cli.ImageList(ctx, options)
+}
+
+// ImageInspect returns detailed information about an image.
+func (c *ClientWrapper) ImageInspect(ctx context.Context, imageID string) (types.ImageInspect, error) {
+	inspect, _, err := c.cli.ImageInspectWithRaw(ctx, imageID)
+	return inspect, err
+}
+
+// Events returns a stream of Docker events.
+func (c *ClientWrapper) Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
+	return c.cli.Events(ctx, options)
 }
 
 // ServerVersion returns information about the Docker server version.

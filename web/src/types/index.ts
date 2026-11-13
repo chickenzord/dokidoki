@@ -216,3 +216,126 @@ export interface ClusterContainersResult {
   items: ClusterContainer[];
   unreachableNodes: UnreachableNode[];
 }
+
+export interface DockerNetworkIPAMConfig {
+  Subnet?: string;
+  IPRange?: string;
+  Gateway?: string;
+  AuxiliaryAddresses?: Record<string, string>;
+}
+
+export interface DockerNetworkIPAM {
+  Driver?: string;
+  Options?: Record<string, string>;
+  Config?: DockerNetworkIPAMConfig[];
+}
+
+export interface DockerNetworkContainerEndpoint {
+  Name?: string;
+  EndpointID?: string;
+  MacAddress?: string;
+  IPv4Address?: string;
+  IPv6Address?: string;
+}
+
+export interface DockerNetwork {
+  Id: string;
+  ID?: string;
+  Name: string;
+  Driver: string;
+  Scope: string;
+  EnableIPv6: boolean;
+  IPAM?: DockerNetworkIPAM;
+  Internal: boolean;
+  Attachable: boolean;
+  Ingress: boolean;
+  Containers?: Record<string, DockerNetworkContainerEndpoint>;
+  Labels?: Record<string, string>;
+  Created?: string;
+}
+
+export interface ClusterNetwork extends DockerNetwork {
+  hostId: string;
+  hostName: string;
+  hostEndpoint: string;
+  hostAddress?: string;
+  hostReadOnly?: boolean;
+}
+
+export interface ClusterNetworksResult {
+  items: ClusterNetwork[];
+  unreachableNodes: UnreachableNode[];
+}
+
+export interface DockerVolumeUsageData {
+  Size?: number;
+  RefCount?: number;
+}
+
+export interface DockerVolume {
+  Name: string;
+  Driver: string;
+  Scope: string;
+  Mountpoint: string;
+  Labels?: Record<string, string>;
+  Options?: Record<string, string>;
+  CreatedAt?: string;
+  Status?: Record<string, any>;
+  UsageData?: DockerVolumeUsageData;
+}
+
+export interface ClusterVolume extends DockerVolume {
+  hostId: string;
+  hostName: string;
+  hostEndpoint: string;
+  hostAddress?: string;
+  hostReadOnly?: boolean;
+}
+
+export interface ClusterVolumesResult {
+  items: ClusterVolume[];
+  unreachableNodes: UnreachableNode[];
+}
+
+export interface DockerImage {
+  Id: string;
+  ID?: string;
+  RepoTags?: string[];
+  RepoDigests?: string[];
+  Created: number;
+  Size: number;
+  VirtualSize?: number;
+  SharedSize?: number;
+  Labels?: Record<string, string>;
+  Containers: number;
+}
+
+export interface ClusterImage extends DockerImage {
+  hostId: string;
+  hostName: string;
+  hostEndpoint: string;
+  hostAddress?: string;
+  hostReadOnly?: boolean;
+}
+
+export interface ClusterImagesResult {
+  items: ClusterImage[];
+  unreachableNodes: UnreachableNode[];
+}
+
+export interface DockerEventActor {
+  Id?: string;
+  ID?: string;
+  Attributes?: Record<string, string>;
+}
+
+export interface DockerEvent {
+  Type: string;
+  Action: string;
+  Actor: DockerEventActor;
+  Time: number;
+  TimeNano: number;
+  // Node info added when streamed / displayed in cluster view
+  hostId?: string;
+  hostName?: string;
+}

@@ -26,8 +26,11 @@ import (
 	"github.com/chickenzord/dokidoki/web"
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/events"
+	"github.com/docker/docker/api/types/image"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/system"
+	"github.com/docker/docker/api/types/volume"
 	errdefs "github.com/docker/docker/errdefs"
 	v1 "github.com/opencontainers/image-spec/specs-go/v1"
 )
@@ -42,6 +45,13 @@ type mockDocker struct {
 	waitContainerFn    func(ctx context.Context, id string, condition container.WaitCondition) (<-chan container.WaitResponse, <-chan error)
 	containerLogsFn    func(ctx context.Context, id string, options container.LogsOptions) (io.ReadCloser, error)
 	removeContainerFn  func(ctx context.Context, id string, options container.RemoveOptions) error
+	networkListFn      func(ctx context.Context, options network.ListOptions) ([]network.Inspect, error)
+	networkInspectFn   func(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error)
+	volumeListFn       func(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error)
+	volumeInspectFn    func(ctx context.Context, volumeID string) (volume.Volume, error)
+	imageListFn        func(ctx context.Context, options image.ListOptions) ([]image.Summary, error)
+	imageInspectFn     func(ctx context.Context, imageID string) (types.ImageInspect, error)
+	eventsFn           func(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error)
 }
 
 func (m *mockDocker) Ping(ctx context.Context) (types.Ping, error) {
@@ -124,6 +134,59 @@ func (m *mockDocker) RemoveContainer(ctx context.Context, id string, options con
 
 func (m *mockDocker) PullImage(ctx context.Context, imageRef string) (io.ReadCloser, error) {
 	return io.NopCloser(strings.NewReader("pulled")), nil
+}
+
+func (m *mockDocker) NetworkList(ctx context.Context, options network.ListOptions) ([]network.Inspect, error) {
+	if m.networkListFn != nil {
+		return m.networkListFn(ctx, options)
+	}
+	return nil, nil
+}
+
+func (m *mockDocker) NetworkInspect(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error) {
+	if m.networkInspectFn != nil {
+		return m.networkInspectFn(ctx, networkID, options)
+	}
+	return network.Inspect{}, nil
+}
+
+func (m *mockDocker) VolumeList(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+	if m.volumeListFn != nil {
+		return m.volumeListFn(ctx, options)
+	}
+	return volume.ListResponse{}, nil
+}
+
+func (m *mockDocker) VolumeInspect(ctx context.Context, volumeID string) (volume.Volume, error) {
+	if m.volumeInspectFn != nil {
+		return m.volumeInspectFn(ctx, volumeID)
+	}
+	return volume.Volume{}, nil
+}
+
+func (m *mockDocker) ImageList(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+	if m.imageListFn != nil {
+		return m.imageListFn(ctx, options)
+	}
+	return nil, nil
+}
+
+func (m *mockDocker) ImageInspect(ctx context.Context, imageID string) (types.ImageInspect, error) {
+	if m.imageInspectFn != nil {
+		return m.imageInspectFn(ctx, imageID)
+	}
+	return types.ImageInspect{}, nil
+}
+
+func (m *mockDocker) Events(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
+	if m.eventsFn != nil {
+		return m.eventsFn(ctx, options)
+	}
+	msgCh := make(chan events.Message)
+	errCh := make(chan error)
+	close(msgCh)
+	close(errCh)
+	return msgCh, errCh
 }
 
 func (m *mockDocker) Close() error {
@@ -2640,6 +2703,265 @@ func TestReadOnlyEnforcement(t *testing.T) {
 		}
 	})
 }
+
+func TestDockerResourcesAPI(t *testing.T) {
+	t.Run("Networks", func(t *testing.T) {
+		m := &mockDocker{
+			networkListFn: func(ctx context.Context, options network.ListOptions) ([]network.Inspect, error) {
+				return []network.Inspect{
+					{ID: "net-1", Name: "bridge", Driver: "bridge"},
+					{ID: "net-2", Name: "my-net", Driver: "overlay"},
+				}, nil
+			},
+			networkInspectFn: func(ctx context.Context, networkID string, options network.InspectOptions) (network.Inspect, error) {
+				if networkID == "net-1" {
+					return network.Inspect{ID: "net-1", Name: "bridge", Driver: "bridge"}, nil
+				}
+				return network.Inspect{}, errors.New("network not found")
+			},
+		}
+
+		handler, _ := setupTestServer(t, m)
+
+		for _, prefix := range []string{"/api", "/api/v1"} {
+			// List
+			req := httptest.NewRequest(http.MethodGet, prefix+"/networks", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("[%s] expected 200, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+			var nets []network.Inspect
+			if err := json.Unmarshal(w.Body.Bytes(), &nets); err != nil || len(nets) != 2 {
+				t.Fatalf("[%s] failed to unmarshal networks: %v, len=%d", prefix, err, len(nets))
+			}
+
+			// Get success
+			req = httptest.NewRequest(http.MethodGet, prefix+"/networks/net-1", nil)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("[%s] expected 200, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+			var netInspect network.Inspect
+			if err := json.Unmarshal(w.Body.Bytes(), &netInspect); err != nil || netInspect.ID != "net-1" {
+				t.Fatalf("[%s] failed to inspect network: %v", prefix, err)
+			}
+
+			// Get not found
+			req = httptest.NewRequest(http.MethodGet, prefix+"/networks/net-unknown", nil)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("[%s] expected 404, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("Volumes", func(t *testing.T) {
+		m := &mockDocker{
+			volumeListFn: func(ctx context.Context, options volume.ListOptions) (volume.ListResponse, error) {
+				return volume.ListResponse{
+					Volumes: []*volume.Volume{
+						{Name: "vol-1", Driver: "local"},
+						{Name: "vol-2", Driver: "local"},
+					},
+				}, nil
+			},
+			volumeInspectFn: func(ctx context.Context, volumeID string) (volume.Volume, error) {
+				if volumeID == "vol-1" {
+					return volume.Volume{Name: "vol-1", Driver: "local"}, nil
+				}
+				return volume.Volume{}, errors.New("volume not found")
+			},
+		}
+
+		handler, _ := setupTestServer(t, m)
+
+		for _, prefix := range []string{"/api", "/api/v1"} {
+			// List
+			req := httptest.NewRequest(http.MethodGet, prefix+"/volumes", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("[%s] expected 200, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+			var vols []*volume.Volume
+			if err := json.Unmarshal(w.Body.Bytes(), &vols); err != nil || len(vols) != 2 {
+				t.Fatalf("[%s] failed to unmarshal volumes: %v, len=%d", prefix, err, len(vols))
+			}
+
+			// Get success
+			req = httptest.NewRequest(http.MethodGet, prefix+"/volumes/vol-1", nil)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("[%s] expected 200, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+			var vol volume.Volume
+			if err := json.Unmarshal(w.Body.Bytes(), &vol); err != nil || vol.Name != "vol-1" {
+				t.Fatalf("[%s] failed to inspect volume: %v", prefix, err)
+			}
+
+			// Get not found
+			req = httptest.NewRequest(http.MethodGet, prefix+"/volumes/vol-unknown", nil)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("[%s] expected 404, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("Images", func(t *testing.T) {
+		m := &mockDocker{
+			imageListFn: func(ctx context.Context, options image.ListOptions) ([]image.Summary, error) {
+				return []image.Summary{
+					{ID: "sha256:img-1", RepoTags: []string{"nginx:latest"}},
+					{ID: "sha256:img-2", RepoTags: []string{"redis:alpine"}},
+				}, nil
+			},
+			imageInspectFn: func(ctx context.Context, imageID string) (types.ImageInspect, error) {
+				if imageID == "sha256:img-1" || imageID == "nginx:latest" {
+					return types.ImageInspect{ID: "sha256:img-1", RepoTags: []string{"nginx:latest"}}, nil
+				}
+				return types.ImageInspect{}, errors.New("image not found")
+			},
+		}
+
+		handler, _ := setupTestServer(t, m)
+
+		for _, prefix := range []string{"/api", "/api/v1"} {
+			// List
+			req := httptest.NewRequest(http.MethodGet, prefix+"/images", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("[%s] expected 200, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+			var imgs []image.Summary
+			if err := json.Unmarshal(w.Body.Bytes(), &imgs); err != nil || len(imgs) != 2 {
+				t.Fatalf("[%s] failed to unmarshal images: %v, len=%d", prefix, err, len(imgs))
+			}
+
+			// Get success
+			req = httptest.NewRequest(http.MethodGet, prefix+"/images/sha256:img-1", nil)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("[%s] expected 200, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+			var imgInspect types.ImageInspect
+			if err := json.Unmarshal(w.Body.Bytes(), &imgInspect); err != nil || imgInspect.ID != "sha256:img-1" {
+				t.Fatalf("[%s] failed to inspect image: %v", prefix, err)
+			}
+
+			// Get not found
+			req = httptest.NewRequest(http.MethodGet, prefix+"/images/unknown", nil)
+			w = httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+			if w.Code != http.StatusNotFound {
+				t.Fatalf("[%s] expected 404, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+		}
+	})
+
+	t.Run("Events_SSE", func(t *testing.T) {
+		msgCh := make(chan events.Message, 2)
+		errCh := make(chan error, 1)
+
+		msgCh <- events.Message{
+			Action: "start",
+			Type:   events.ContainerEventType,
+			Actor:  events.Actor{ID: "container-123"},
+			Time:   1700000000,
+		}
+		close(msgCh)
+
+		m := &mockDocker{
+			eventsFn: func(ctx context.Context, options events.ListOptions) (<-chan events.Message, <-chan error) {
+				return msgCh, errCh
+			},
+		}
+
+		handler, _ := setupTestServer(t, m)
+
+		for _, prefix := range []string{"/api", "/api/v1"} {
+			// Create a new msgCh for the second run
+			if prefix == "/api/v1" {
+				msgCh = make(chan events.Message, 1)
+				msgCh <- events.Message{
+					Action: "stop",
+					Type:   events.ContainerEventType,
+					Actor:  events.Actor{ID: "container-456"},
+					Time:   1700000001,
+				}
+				close(msgCh)
+			}
+
+			req := httptest.NewRequest(http.MethodGet, prefix+"/events", nil)
+			w := httptest.NewRecorder()
+			handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("[%s] expected 200, got %d: %s", prefix, w.Code, w.Body.String())
+			}
+			if ct := w.Header().Get("Content-Type"); ct != "text/event-stream" {
+				t.Fatalf("[%s] expected text/event-stream, got %q", prefix, ct)
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, "event: message") {
+				t.Fatalf("[%s] expected event: message in body: %s", prefix, body)
+			}
+		}
+	})
+
+	t.Run("NilDockerClient", func(t *testing.T) {
+		server := NewServer(nil, nil, nil, nil, "")
+		handler := server.Routes()
+
+		// Networks list -> empty array 200
+		req := httptest.NewRequest(http.MethodGet, "/api/networks", nil)
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+			t.Errorf("expected [] 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// Volumes list -> empty array 200
+		req = httptest.NewRequest(http.MethodGet, "/api/volumes", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+			t.Errorf("expected [] 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// Images list -> empty array 200
+		req = httptest.NewRequest(http.MethodGet, "/api/images", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || strings.TrimSpace(w.Body.String()) != "[]" {
+			t.Errorf("expected [] 200, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// Networks inspect -> 404
+		req = httptest.NewRequest(http.MethodGet, "/api/networks/net-1", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusNotFound {
+			t.Errorf("expected 404, got %d: %s", w.Code, w.Body.String())
+		}
+
+		// Events -> 503
+		req = httptest.NewRequest(http.MethodGet, "/api/events", nil)
+		w = httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		if w.Code != http.StatusServiceUnavailable {
+			t.Errorf("expected 503, got %d: %s", w.Code, w.Body.String())
+		}
+	})
+}
+
 
 
 

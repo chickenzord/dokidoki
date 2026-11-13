@@ -14,13 +14,17 @@ import { Sheet, SheetContent, SheetTitle } from './components/ui/sheet';
 import { ClusterStacksView } from './components/ClusterStacksView';
 import { ClusterContainersView } from './components/ClusterContainersView';
 import { ClusterNodesView } from './components/ClusterNodesView';
+import { ClusterNetworksView } from './components/ClusterNetworksView';
+import { ClusterVolumesView } from './components/ClusterVolumesView';
+import { ClusterImagesView } from './components/ClusterImagesView';
+import { EventsView } from './components/EventsView';
 import { NodeDetailView } from './pages/NodeDetailView';
 import { NodeStackDetailRouteComponent } from './pages/NodeStackDetailRouteComponent';
 import { NodeContainerDetailRouteComponent } from './pages/NodeContainerDetailRouteComponent';
 import { useDocumentTitle } from './hooks/useDocumentTitle';
 import { useNodesQuery } from './hooks/useClusterData';
 import { BreadcrumbNav } from './components/BreadcrumbNav';
-import { Server, Layers, Box } from 'lucide-react';
+import { Server, Layers, Box, Network, HardDrive } from 'lucide-react';
 
 export interface ClusterUIContextType {
   selectedHostId: string | null;
@@ -196,6 +200,133 @@ function NodesRouteComponent() {
   return <ClusterNodesView />;
 }
 
+// Global Networks Route: /networks
+interface NetworksSearch {
+  host?: string;
+}
+
+const networksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/networks',
+  validateSearch: (search: Record<string, unknown>): NetworksSearch => ({
+    host: typeof search.host === 'string' ? search.host : undefined,
+  }),
+  component: NetworksRouteComponent,
+});
+
+function NetworksRouteComponent() {
+  useDocumentTitle('Networks');
+  const search = networksRoute.useSearch();
+  const { selectedHostId, searchQuery } = useClusterUI();
+  const effectiveHost =
+    search.host !== undefined
+      ? search.host === 'all'
+        ? null
+        : search.host
+      : selectedHostId;
+
+  return (
+    <ClusterNetworksView
+      selectedHostId={effectiveHost}
+      searchQuery={searchQuery}
+    />
+  );
+}
+
+// Global Volumes Route: /volumes
+interface VolumesSearch {
+  host?: string;
+}
+
+const volumesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/volumes',
+  validateSearch: (search: Record<string, unknown>): VolumesSearch => ({
+    host: typeof search.host === 'string' ? search.host : undefined,
+  }),
+  component: VolumesRouteComponent,
+});
+
+function VolumesRouteComponent() {
+  useDocumentTitle('Volumes');
+  const search = volumesRoute.useSearch();
+  const { selectedHostId, searchQuery } = useClusterUI();
+  const effectiveHost =
+    search.host !== undefined
+      ? search.host === 'all'
+        ? null
+        : search.host
+      : selectedHostId;
+
+  return (
+    <ClusterVolumesView
+      selectedHostId={effectiveHost}
+      searchQuery={searchQuery}
+    />
+  );
+}
+
+// Global Images Route: /images
+interface ImagesSearch {
+  host?: string;
+}
+
+const imagesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/images',
+  validateSearch: (search: Record<string, unknown>): ImagesSearch => ({
+    host: typeof search.host === 'string' ? search.host : undefined,
+  }),
+  component: ImagesRouteComponent,
+});
+
+function ImagesRouteComponent() {
+  useDocumentTitle('Images');
+  const search = imagesRoute.useSearch();
+  const { selectedHostId, searchQuery } = useClusterUI();
+  const effectiveHost =
+    search.host !== undefined
+      ? search.host === 'all'
+        ? null
+        : search.host
+      : selectedHostId;
+
+  return (
+    <ClusterImagesView
+      selectedHostId={effectiveHost}
+      searchQuery={searchQuery}
+    />
+  );
+}
+
+// Global Events Route: /events
+interface EventsSearch {
+  host?: string;
+}
+
+const eventsRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/events',
+  validateSearch: (search: Record<string, unknown>): EventsSearch => ({
+    host: typeof search.host === 'string' ? search.host : undefined,
+  }),
+  component: EventsRouteComponent,
+});
+
+function EventsRouteComponent() {
+  useDocumentTitle('Events');
+  const search = eventsRoute.useSearch();
+  const { selectedHostId } = useClusterUI();
+  const effectiveHost =
+    search.host !== undefined
+      ? search.host === 'all'
+        ? null
+        : search.host
+      : selectedHostId;
+
+  return <EventsView selectedHostId={effectiveHost} />;
+}
+
 // Node-scoped route 1: /nodes/$nodeId
 const nodeDetailRoute = createRoute({
   getParentRoute: () => rootRoute,
@@ -298,16 +429,134 @@ const nodeContainerDetailRoute = createRoute({
   component: NodeContainerDetailRouteComponent,
 });
 
+// Node-scoped route 6: /nodes/$nodeId/networks
+const nodeNetworksRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId/networks',
+  component: NodeNetworksRouteComponent,
+});
+
+function NodeNetworksRouteComponent() {
+  const { nodeId } = useParams({ from: '/nodes/$nodeId/networks' });
+  const { searchQuery } = useClusterUI();
+  const { data: nodes = [] } = useNodesQuery();
+  const node = nodes.find((n) => n.id === nodeId);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Networks on ${nodeLabel}`);
+
+  return (
+    <div className="space-y-4">
+      <BreadcrumbNav
+        items={[
+          {
+            label: nodeLabel,
+            to: '/nodes/$nodeId',
+            params: { nodeId },
+            icon: Server,
+          },
+          {
+            label: 'Networks',
+            icon: Network,
+          },
+        ]}
+      />
+
+      <ClusterNetworksView selectedHostId={nodeId} searchQuery={searchQuery} />
+    </div>
+  );
+}
+
+// Node-scoped route 7: /nodes/$nodeId/volumes
+const nodeVolumesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId/volumes',
+  component: NodeVolumesRouteComponent,
+});
+
+function NodeVolumesRouteComponent() {
+  const { nodeId } = useParams({ from: '/nodes/$nodeId/volumes' });
+  const { searchQuery } = useClusterUI();
+  const { data: nodes = [] } = useNodesQuery();
+  const node = nodes.find((n) => n.id === nodeId);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Volumes on ${nodeLabel}`);
+
+  return (
+    <div className="space-y-4">
+      <BreadcrumbNav
+        items={[
+          {
+            label: nodeLabel,
+            to: '/nodes/$nodeId',
+            params: { nodeId },
+            icon: Server,
+          },
+          {
+            label: 'Volumes',
+            icon: HardDrive,
+          },
+        ]}
+      />
+
+      <ClusterVolumesView selectedHostId={nodeId} searchQuery={searchQuery} />
+    </div>
+  );
+}
+
+// Node-scoped route 8: /nodes/$nodeId/images
+const nodeImagesRoute = createRoute({
+  getParentRoute: () => rootRoute,
+  path: '/nodes/$nodeId/images',
+  component: NodeImagesRouteComponent,
+});
+
+function NodeImagesRouteComponent() {
+  const { nodeId } = useParams({ from: '/nodes/$nodeId/images' });
+  const { searchQuery } = useClusterUI();
+  const { data: nodes = [] } = useNodesQuery();
+  const node = nodes.find((n) => n.id === nodeId);
+  const nodeLabel = node?.name || (nodeId === 'local' ? 'Local' : (nodeId ? nodeId.substring(0, 8) : ''));
+  useDocumentTitle(`Images on ${nodeLabel}`);
+
+  return (
+    <div className="space-y-4">
+      <BreadcrumbNav
+        items={[
+          {
+            label: nodeLabel,
+            to: '/nodes/$nodeId',
+            params: { nodeId },
+            icon: Server,
+          },
+          {
+            label: 'Images',
+            icon: Layers,
+          },
+        ]}
+      />
+
+      <ClusterImagesView selectedHostId={nodeId} searchQuery={searchQuery} />
+    </div>
+  );
+}
+
 const routeTree = rootRoute.addChildren([
   indexRoute,
   stacksRoute,
   containersRoute,
   nodesRoute,
+  networksRoute,
+  volumesRoute,
+  imagesRoute,
+  eventsRoute,
   nodeDetailRoute,
   nodeStacksRoute,
   nodeStackDetailRoute,
   nodeContainersRoute,
   nodeContainerDetailRoute,
+  nodeNetworksRoute,
+  nodeVolumesRoute,
+  nodeImagesRoute,
 ]);
 
 export const router = createRouter({ routeTree });

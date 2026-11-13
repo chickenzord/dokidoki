@@ -11,15 +11,18 @@ import {
   HardDrive,
   Search,
   X,
+  Activity,
 } from 'lucide-react';
 import { Node } from '../types';
 import {
   useNodesQuery,
   useClusterStacksQuery,
   useClusterContainersQuery,
+  useClusterNetworksQuery,
+  useClusterVolumesQuery,
+  useClusterImagesQuery,
 } from '../hooks/useClusterData';
 import { Input } from './ui/input';
-import { Badge } from './ui/badge';
 import { ScrollArea } from './ui/scroll-area';
 import { NodeHealthDot } from './NodeHealthDot';
 
@@ -33,6 +36,7 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
 
   const [filterText, setFilterText] = useState('');
   const [expandedNodes, setExpandedNodes] = useState<Record<string, boolean>>({});
+  const [showMoreCluster, setShowMoreCluster] = useState<boolean>(false);
 
   const updateExpanded = (key: string, value: boolean) => {
     setExpandedNodes((prev) => ({ ...prev, [key]: value }));
@@ -47,9 +51,15 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
   const { data: nodes = [] } = useNodesQuery();
   const { data: stacksData } = useClusterStacksQuery();
   const { data: containersData } = useClusterContainersQuery();
+  const { data: networksData } = useClusterNetworksQuery();
+  const { data: volumesData } = useClusterVolumesQuery();
+  const { data: imagesData } = useClusterImagesQuery();
 
   const stacks = stacksData?.items ?? [];
   const containers = containersData?.items ?? [];
+  const networks = networksData?.items ?? [];
+  const volumes = volumesData?.items ?? [];
+  const images = imagesData?.items ?? [];
 
   // Group stacks & containers by node
   const nodeDataMap = useMemo(() => {
@@ -60,7 +70,6 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
         stacks: typeof stacks;
         containers: typeof containers;
         stackContainers: Map<string, typeof containers>;
-        standaloneContainers: typeof containers;
       }
     >();
 
@@ -69,15 +78,12 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
       const nodeContainers = containers.filter((c) => c.hostId === n.id);
 
       const stackContainers = new Map<string, typeof containers>();
-      const standaloneContainers: typeof containers = [];
 
       nodeContainers.forEach((c) => {
         if (c.stack) {
           const list = stackContainers.get(c.stack) || [];
           list.push(c);
           stackContainers.set(c.stack, list);
-        } else {
-          standaloneContainers.push(c);
         }
       });
 
@@ -86,7 +92,6 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
         stacks: nodeStacks,
         containers: nodeContainers,
         stackContainers,
-        standaloneContainers,
       });
     });
 
@@ -97,8 +102,18 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
 
   // Auto-reveal on route change: ensure parent tree branches are expanded and scroll item into view
   useEffect(() => {
+    // If active route is one of the secondary cluster resources, auto-reveal the cluster section
+    if (
+      pathname === '/networks' ||
+      pathname === '/volumes' ||
+      pathname === '/images' ||
+      pathname === '/events'
+    ) {
+      setShowMoreCluster(true);
+    }
+
     // Check if route is a node-scoped route: /nodes/:nodeId/...
-    const match = pathname.match(/^\/nodes\/([^/]+)(?:\/(stacks|containers)(?:\/([^/]+))?)?/);
+    const match = pathname.match(/^\/nodes\/([^/]+)(?:\/(stacks|containers|networks|volumes|images)(?:\/([^/]+))?)?/);
     if (!match) return;
 
     const [, nodeId, resourceType, resourceId] = match;
@@ -122,14 +137,12 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
       } else if (resourceType === 'containers') {
         if (resourceId) {
           // Viewing a specific container (/nodes/:nodeId/containers/:containerId):
-          // Find if it's inside a stack or standalone, and expand parent(s) to reveal it.
+          // If it's inside a stack, expand parent stack branch to reveal it.
           const nodeData = nodeDataMap.get(nodeId);
           const containerObj = nodeData?.containers.find((c) => c.id === resourceId);
           if (containerObj?.stack) {
             updates[`node_${nodeId}_stacks`] = true;
             updates[`node_${nodeId}_stack_${containerObj.stack}`] = true;
-          } else if (containerObj) {
-            updates[`node_${nodeId}_standalone`] = true;
           }
         }
       }
@@ -193,8 +206,8 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
               Cluster
             </div>
             <div className="space-y-0.5">
-              {/* All Stacks */}
-              {(!query || 'all stacks'.includes(query) || 'stacks'.includes(query)) && (
+              {/* Stacks */}
+              {(!query || 'stacks'.includes(query)) && (
                 <Link
                   to="/stacks"
                   onClick={onItemClick}
@@ -207,7 +220,7 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Layers className={`w-3.5 h-3.5 flex-shrink-0 ${resourceTheme.stack.icon}`} />
-                    <span className="truncate">All Stacks</span>
+                    <span className="truncate">Stacks</span>
                   </div>
                   <span className="text-[10px] text-slate-400 font-mono">
                     {stacks.length}
@@ -215,8 +228,8 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                 </Link>
               )}
 
-              {/* All Containers */}
-              {(!query || 'all containers'.includes(query) || 'containers'.includes(query)) && (
+              {/* Containers */}
+              {(!query || 'containers'.includes(query)) && (
                 <Link
                   to="/containers"
                   onClick={onItemClick}
@@ -229,7 +242,7 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Box className={`w-3.5 h-3.5 flex-shrink-0 ${resourceTheme.container.icon}`} />
-                    <span className="truncate">All Containers</span>
+                    <span className="truncate">Containers</span>
                   </div>
                   <span className="text-[10px] text-slate-400 font-mono">
                     {containers.length}
@@ -237,8 +250,8 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                 </Link>
               )}
 
-              {/* All Nodes */}
-              {(!query || 'all nodes'.includes(query) || 'nodes'.includes(query)) && (
+              {/* Nodes */}
+              {(!query || 'nodes'.includes(query)) && (
                 <Link
                   to="/nodes"
                   onClick={onItemClick}
@@ -251,7 +264,7 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                 >
                   <div className="flex items-center gap-2 min-w-0">
                     <Server className={`w-3.5 h-3.5 flex-shrink-0 ${resourceTheme.node.icon}`} />
-                    <span className="truncate">All Nodes</span>
+                    <span className="truncate">Nodes</span>
                   </div>
                   <span className="text-[10px] text-slate-400 font-mono">
                     {nodes.length}
@@ -259,34 +272,118 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                 </Link>
               )}
 
-              {/* Placeholders for Future Networks & Volumes */}
-              {!query && (
+              {/* Collapsed Secondary Cluster Resources (Networks, Volumes, Images, Events) */}
+              {(showMoreCluster || query !== '') && (
                 <>
-                  <div
-                    className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-slate-500 cursor-not-allowed opacity-50"
-                    title="Networks (Coming soon)"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <Network className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span className="truncate">All Networks</span>
-                    </div>
-                    <Badge variant="outline" className="text-[9px] px-1 py-0 border-slate-800 text-slate-500">
-                      soon
-                    </Badge>
-                  </div>
-                  <div
-                    className="flex items-center justify-between px-2.5 py-1.5 rounded-md text-slate-500 cursor-not-allowed opacity-50"
-                    title="Volumes (Coming soon)"
-                  >
-                    <div className="flex items-center gap-2 min-w-0">
-                      <HardDrive className="w-3.5 h-3.5 flex-shrink-0" />
-                      <span className="truncate">All Volumes</span>
-                    </div>
-                    <Badge variant="outline" className="text-[9px] px-1 py-0 border-slate-800 text-slate-500">
-                      soon
-                    </Badge>
-                  </div>
+                  {/* Networks */}
+                  {(!query || 'networks'.includes(query)) && (
+                    <Link
+                      to="/networks"
+                      onClick={onItemClick}
+                      data-sidebar-active={isExactActive('/networks')}
+                      className={`group flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors ${
+                        isExactActive('/networks')
+                          ? resourceTheme.network.activeBg
+                          : 'text-slate-300 hover:bg-slate-900 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Network className={`w-3.5 h-3.5 flex-shrink-0 ${resourceTheme.network.icon}`} />
+                        <span className="truncate">Networks</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {networks.length}
+                      </span>
+                    </Link>
+                  )}
+
+                  {/* Volumes */}
+                  {(!query || 'volumes'.includes(query)) && (
+                    <Link
+                      to="/volumes"
+                      onClick={onItemClick}
+                      data-sidebar-active={isExactActive('/volumes')}
+                      className={`group flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors ${
+                        isExactActive('/volumes')
+                          ? resourceTheme.volume.activeBg
+                          : 'text-slate-300 hover:bg-slate-900 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <HardDrive className={`w-3.5 h-3.5 flex-shrink-0 ${resourceTheme.volume.icon}`} />
+                        <span className="truncate">Volumes</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {volumes.length}
+                      </span>
+                    </Link>
+                  )}
+
+                  {/* Images */}
+                  {(!query || 'images'.includes(query)) && (
+                    <Link
+                      to="/images"
+                      onClick={onItemClick}
+                      data-sidebar-active={isExactActive('/images')}
+                      className={`group flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors ${
+                        isExactActive('/images')
+                          ? resourceTheme.image.activeBg
+                          : 'text-slate-300 hover:bg-slate-900 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Layers className={`w-3.5 h-3.5 flex-shrink-0 ${resourceTheme.image.icon}`} />
+                        <span className="truncate">Images</span>
+                      </div>
+                      <span className="text-[10px] text-slate-400 font-mono">
+                        {images.length}
+                      </span>
+                    </Link>
+                  )}
+
+                  {/* Events */}
+                  {(!query || 'events'.includes(query)) && (
+                    <Link
+                      to="/events"
+                      onClick={onItemClick}
+                      data-sidebar-active={isExactActive('/events')}
+                      className={`group flex items-center justify-between px-2.5 py-1.5 rounded-md transition-colors ${
+                        isExactActive('/events')
+                          ? resourceTheme.event.activeBg
+                          : 'text-slate-300 hover:bg-slate-900 hover:text-white'
+                      }`}
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <Activity className={`w-3.5 h-3.5 flex-shrink-0 ${resourceTheme.event.icon}`} />
+                        <span className="truncate">Events</span>
+                      </div>
+                      <span className="text-[10px] text-emerald-400 font-mono">
+                        live
+                      </span>
+                    </Link>
+                  )}
                 </>
+              )}
+
+              {/* Show more / show less toggle button */}
+              {!query && (
+                <button
+                  type="button"
+                  onClick={() => setShowMoreCluster((prev) => !prev)}
+                  className="w-full flex items-center gap-1.5 px-2.5 py-1 rounded text-[11px] text-slate-500 hover:text-slate-300 hover:bg-slate-900/60 transition-colors"
+                >
+                  {showMoreCluster ? (
+                    <>
+                      <ChevronDown className="w-3 h-3 text-slate-500" />
+                      <span>Less resources</span>
+                    </>
+                  ) : (
+                    <>
+                      <ChevronRight className="w-3 h-3 text-slate-500" />
+                      <span>More resources</span>
+                    </>
+                  )}
+                </button>
               )}
             </div>
           </div>
@@ -308,7 +405,6 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                   const nodeStacks = nodeEntry?.stacks ?? [];
                   const nodeContainers = nodeEntry?.containers ?? [];
                   const stackContainers = nodeEntry?.stackContainers;
-                  const standalone = nodeEntry?.standaloneContainers ?? [];
 
                   // Check filter match
                   const nodeMatch = !query || node.name.toLowerCase().includes(query) || node.id.includes(query);
@@ -578,106 +674,65 @@ export const TreeSidebar: React.FC<TreeSidebarProps> = ({ onItemClick }) => {
                             );
                           })()}
 
-                          {/* 3. Standalone Containers Group (if any exist) */}
-                          {standalone.length > 0 && (!query || standalone.some((c) => c.name.toLowerCase().includes(query))) && (
-                            (() => {
-                              const standaloneKey = `node_${node.id}_standalone`;
-                              const isStandaloneExpanded =
-                                query !== '' ? true : (expandedNodes[standaloneKey] ?? false);
-
-                              return (
-                                <div className="space-y-0.5">
-                                  <div
-                                    className="group flex items-center justify-between px-1.5 py-1 rounded-md text-slate-400 hover:bg-slate-900 hover:text-slate-200 transition-colors cursor-pointer"
-                                    onClick={() => toggleExpand(standaloneKey, false)}
-                                  >
-                                    <div className="flex items-center gap-1 min-w-0 flex-1">
-                                      <button
-                                        type="button"
-                                        className="p-0.5 text-slate-400 hover:text-white rounded"
-                                      >
-                                        {isStandaloneExpanded ? (
-                                          <ChevronDown className="w-3 h-3 text-slate-400" />
-                                        ) : (
-                                          <ChevronRight className="w-3 h-3 text-slate-400" />
-                                        )}
-                                      </button>
-                                      <span className="truncate text-slate-400">Standalone</span>
-                                    </div>
-                                    <span className="text-[10px] text-slate-400 font-mono">
-                                      {standalone.length}
-                                    </span>
-                                  </div>
-
-                                  {isStandaloneExpanded && (
-                                    <div className="pl-4 ml-1.5 border-l border-slate-800/40 space-y-0.5">
-                                      {standalone.map((c) => {
-                                        const cleanName = c.name.replace(/^\//, '');
-                                        if (query && !cleanName.toLowerCase().includes(query)) {
-                                          return null;
-                                        }
-                                        const isContainerActive =
-                                          pathname === `/nodes/${node.id}/containers/${c.id}`;
-                                        const isRunning = c.state === 'running';
-
-                                        return (
-                                          <Link
-                                            key={c.id}
-                                            to="/nodes/$nodeId/containers/$containerId"
-                                            params={{ nodeId: node.id, containerId: c.id }}
-                                            onClick={onItemClick}
-                                            data-sidebar-active={isContainerActive}
-                                            className={`group flex items-center justify-between px-2 py-0.5 rounded transition-colors text-[11px] font-mono ${
-                                              isContainerActive
-                                                ? resourceTheme.container.activeBg
-                                                : 'text-slate-400 hover:bg-slate-900 hover:text-slate-200'
-                                            }`}
-                                            title={cleanName}
-                                          >
-                                            <div className="flex items-center gap-1.5 min-w-0">
-                                              <span
-                                                className={`w-1.5 h-1.5 rounded-full flex-shrink-0 ${
-                                                  isRunning ? 'bg-emerald-400' : 'bg-slate-600'
-                                                }`}
-                                              />
-                                              <span className="truncate">{cleanName}</span>
-                                            </div>
-                                          </Link>
-                                        );
-                                      })}
-                                    </div>
-                                  )}
-                                </div>
-                              );
-                            })()
+                          {/* Node Networks, Volumes & Images */}
+                          {(!query || 'networks'.includes(query)) && (
+                            <Link
+                              to="/nodes/$nodeId/networks"
+                              params={{ nodeId: node.id }}
+                              onClick={onItemClick}
+                              data-sidebar-active={isExactActive(`/nodes/${node.id}/networks`)}
+                              className={`flex items-center justify-between px-1.5 py-1 rounded transition-colors text-[11px] ${
+                                isExactActive(`/nodes/${node.id}/networks`)
+                                  ? resourceTheme.network.activeBg
+                                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="w-4" />
+                                <Network className={`w-3 h-3 flex-shrink-0 ${resourceTheme.network.icon}`} />
+                                <span className="truncate">Networks</span>
+                              </div>
+                            </Link>
                           )}
 
-                          {/* Placeholders for Future Node Networks & Volumes */}
-                          {!query && (
-                            <>
-                              <div
-                                className="flex items-center justify-between px-1.5 py-1 text-slate-500 opacity-50 cursor-not-allowed text-[11px]"
-                                title="Networks (Coming soon)"
-                              >
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  <span className="w-4" />
-                                  <Network className="w-3 h-3 flex-shrink-0" />
-                                  <span className="truncate">Networks</span>
-                                </div>
-                                <span className="text-[9px] font-mono">soon</span>
+                          {(!query || 'volumes'.includes(query)) && (
+                            <Link
+                              to="/nodes/$nodeId/volumes"
+                              params={{ nodeId: node.id }}
+                              onClick={onItemClick}
+                              data-sidebar-active={isExactActive(`/nodes/${node.id}/volumes`)}
+                              className={`flex items-center justify-between px-1.5 py-1 rounded transition-colors text-[11px] ${
+                                isExactActive(`/nodes/${node.id}/volumes`)
+                                  ? resourceTheme.volume.activeBg
+                                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="w-4" />
+                                <HardDrive className={`w-3 h-3 flex-shrink-0 ${resourceTheme.volume.icon}`} />
+                                <span className="truncate">Volumes</span>
                               </div>
-                              <div
-                                className="flex items-center justify-between px-1.5 py-1 text-slate-500 opacity-50 cursor-not-allowed text-[11px]"
-                                title="Volumes (Coming soon)"
-                              >
-                                <div className="flex items-center gap-1.5 min-w-0">
-                                  <span className="w-4" />
-                                  <HardDrive className="w-3 h-3 flex-shrink-0" />
-                                  <span className="truncate">Volumes</span>
-                                </div>
-                                <span className="text-[9px] font-mono">soon</span>
+                            </Link>
+                          )}
+
+                          {(!query || 'images'.includes(query)) && (
+                            <Link
+                              to="/nodes/$nodeId/images"
+                              params={{ nodeId: node.id }}
+                              onClick={onItemClick}
+                              data-sidebar-active={isExactActive(`/nodes/${node.id}/images`)}
+                              className={`flex items-center justify-between px-1.5 py-1 rounded transition-colors text-[11px] ${
+                                isExactActive(`/nodes/${node.id}/images`)
+                                  ? resourceTheme.image.activeBg
+                                  : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60'
+                              }`}
+                            >
+                              <div className="flex items-center gap-1.5 min-w-0">
+                                <span className="w-4" />
+                                <Layers className={`w-3 h-3 flex-shrink-0 ${resourceTheme.image.icon}`} />
+                                <span className="truncate">Images</span>
                               </div>
-                            </>
+                            </Link>
                           )}
                         </div>
                       )}

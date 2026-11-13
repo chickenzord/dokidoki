@@ -12,6 +12,14 @@ import {
   ClusterStacksResult,
   ClusterContainersResult,
   UnreachableNode,
+  ClusterNetwork,
+  ClusterNetworksResult,
+  ClusterVolume,
+  ClusterVolumesResult,
+  ClusterImage,
+  ClusterImagesResult,
+  DockerNetwork,
+  DockerVolume,
 } from '../types';
 
 export function getNodeEndpoint(node: Node): string {
@@ -306,6 +314,226 @@ export function useStackContainersQuery(hostEndpoint: string, stackName: string)
       }));
     },
     enabled: Boolean(stackName),
+    refetchInterval: 10000,
+  });
+}
+
+export function useClusterNetworksQuery(selectedHostId?: string | null) {
+  const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
+
+  return useQuery({
+    queryKey: ['cluster-networks', selectedHostId ?? 'all'],
+    queryFn: async (): Promise<ClusterNetworksResult> => {
+      const isAllNodes = !selectedHostId || selectedHostId === 'all';
+
+      const filteredNodes = isAllNodes
+        ? nodes.filter((n) => n.status !== 'offline')
+        : nodes.filter((n) => n.id === selectedHostId);
+
+      const targetNodes = filteredNodes.length > 0
+        ? filteredNodes
+        : (isAllNodes && nodes.some((n) => n.is_self))
+          ? nodes.filter((n) => n.is_self)
+          : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
+
+      const results = await Promise.allSettled(
+        targetNodes.map(async (node) => {
+          if (!node.is_self && (!node.addresses || node.addresses.length === 0)) {
+            throw new Error(`Node ${node.name} has no reachable IP or address`);
+          }
+          const endpoint = getNodeEndpoint(node);
+          const rawAddress = node.addresses?.[0];
+          const networks = await api.getNetworks(endpoint, { timeout: CLUSTER_NODE_TIMEOUT_MS });
+          return networks.map((net) => {
+            const rawId = net.Id || net.ID || '';
+            return {
+              ...net,
+              Id: rawId,
+              ID: rawId,
+              hostId: node.id,
+              hostName: node.name,
+              hostEndpoint: endpoint,
+              hostAddress: rawAddress,
+              hostReadOnly: node.read_only,
+            };
+          });
+        })
+      );
+
+      const allNetworks: ClusterNetwork[] = [];
+      const unreachableNodes: UnreachableNode[] = [];
+
+      results.forEach((res, index) => {
+        const node = targetNodes[index];
+        if (res.status === 'fulfilled') {
+          allNetworks.push(...res.value);
+        } else {
+          console.warn('Failed to fetch networks for node:', node.name, res.reason);
+          unreachableNodes.push({
+            id: node.id,
+            name: node.name,
+            error: res.reason?.message || String(res.reason),
+          });
+        }
+      });
+
+      return { items: allNetworks, unreachableNodes };
+    },
+    enabled: !nodesLoading,
+    refetchInterval: 10000,
+  });
+}
+
+export function useNetworkDetailQuery(hostEndpoint: string, networkId: string, enabled = true) {
+  return useQuery<DockerNetwork>({
+    queryKey: ['network-detail', hostEndpoint, networkId],
+    queryFn: () => api.getNetwork(networkId, hostEndpoint),
+    enabled: Boolean(networkId) && enabled,
+    refetchInterval: 10000,
+  });
+}
+
+export function useClusterVolumesQuery(selectedHostId?: string | null) {
+  const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
+
+  return useQuery({
+    queryKey: ['cluster-volumes', selectedHostId ?? 'all'],
+    queryFn: async (): Promise<ClusterVolumesResult> => {
+      const isAllNodes = !selectedHostId || selectedHostId === 'all';
+
+      const filteredNodes = isAllNodes
+        ? nodes.filter((n) => n.status !== 'offline')
+        : nodes.filter((n) => n.id === selectedHostId);
+
+      const targetNodes = filteredNodes.length > 0
+        ? filteredNodes
+        : (isAllNodes && nodes.some((n) => n.is_self))
+          ? nodes.filter((n) => n.is_self)
+          : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
+
+      const results = await Promise.allSettled(
+        targetNodes.map(async (node) => {
+          if (!node.is_self && (!node.addresses || node.addresses.length === 0)) {
+            throw new Error(`Node ${node.name} has no reachable IP or address`);
+          }
+          const endpoint = getNodeEndpoint(node);
+          const rawAddress = node.addresses?.[0];
+          const volumes = await api.getVolumes(endpoint, { timeout: CLUSTER_NODE_TIMEOUT_MS });
+          return volumes.map((vol) => ({
+            ...vol,
+            hostId: node.id,
+            hostName: node.name,
+            hostEndpoint: endpoint,
+            hostAddress: rawAddress,
+            hostReadOnly: node.read_only,
+          }));
+        })
+      );
+
+      const allVolumes: ClusterVolume[] = [];
+      const unreachableNodes: UnreachableNode[] = [];
+
+      results.forEach((res, index) => {
+        const node = targetNodes[index];
+        if (res.status === 'fulfilled') {
+          allVolumes.push(...res.value);
+        } else {
+          console.warn('Failed to fetch volumes for node:', node.name, res.reason);
+          unreachableNodes.push({
+            id: node.id,
+            name: node.name,
+            error: res.reason?.message || String(res.reason),
+          });
+        }
+      });
+
+      return { items: allVolumes, unreachableNodes };
+    },
+    enabled: !nodesLoading,
+    refetchInterval: 10000,
+  });
+}
+
+export function useVolumeDetailQuery(hostEndpoint: string, volumeName: string, enabled = true) {
+  return useQuery<DockerVolume>({
+    queryKey: ['volume-detail', hostEndpoint, volumeName],
+    queryFn: () => api.getVolume(volumeName, hostEndpoint),
+    enabled: Boolean(volumeName) && enabled,
+    refetchInterval: 10000,
+  });
+}
+
+export function useClusterImagesQuery(selectedHostId?: string | null) {
+  const { data: nodes = [], isLoading: nodesLoading } = useNodesQuery();
+
+  return useQuery({
+    queryKey: ['cluster-images', selectedHostId ?? 'all'],
+    queryFn: async (): Promise<ClusterImagesResult> => {
+      const isAllNodes = !selectedHostId || selectedHostId === 'all';
+
+      const filteredNodes = isAllNodes
+        ? nodes.filter((n) => n.status !== 'offline')
+        : nodes.filter((n) => n.id === selectedHostId);
+
+      const targetNodes = filteredNodes.length > 0
+        ? filteredNodes
+        : (isAllNodes && nodes.some((n) => n.is_self))
+          ? nodes.filter((n) => n.is_self)
+          : [{ id: 'local', name: 'Local Host', addresses: [], status: 'alive' as const, version: '', is_self: true }];
+
+      const results = await Promise.allSettled(
+        targetNodes.map(async (node) => {
+          if (!node.is_self && (!node.addresses || node.addresses.length === 0)) {
+            throw new Error(`Node ${node.name} has no reachable IP or address`);
+          }
+          const endpoint = getNodeEndpoint(node);
+          const rawAddress = node.addresses?.[0];
+          const images = await api.getImages(endpoint, { timeout: CLUSTER_NODE_TIMEOUT_MS });
+          return images.map((img) => {
+            const rawId = img.Id || img.ID || '';
+            return {
+              ...img,
+              Id: rawId,
+              ID: rawId,
+              hostId: node.id,
+              hostName: node.name,
+              hostEndpoint: endpoint,
+              hostAddress: rawAddress,
+              hostReadOnly: node.read_only,
+            };
+          });
+        })
+      );
+
+      const allImages: ClusterImage[] = [];
+      const unreachableNodes: UnreachableNode[] = [];
+
+      results.forEach((res, index) => {
+        const node = targetNodes[index];
+        if (res.status === 'fulfilled') {
+          allImages.push(...res.value);
+        } else {
+          console.warn('Failed to fetch images for node:', node.name, res.reason);
+          unreachableNodes.push({
+            id: node.id,
+            name: node.name,
+            error: res.reason?.message || String(res.reason),
+          });
+        }
+      });
+
+      return { items: allImages, unreachableNodes };
+    },
+    enabled: !nodesLoading,
+    refetchInterval: 10000,
+  });
+}
+
+export function useImageDetailQuery(hostEndpoint: string, imageId: string, enabled = true) {
+  return useQuery<any>({
+    queryKey: ['image-detail', hostEndpoint, imageId],
+    queryFn: () => api.getImage(imageId, hostEndpoint),
+    enabled: Boolean(imageId) && enabled,
     refetchInterval: 10000,
   });
 }

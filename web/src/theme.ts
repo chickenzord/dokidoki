@@ -33,4 +33,14 @@ export const resourceTheme = {
     activeBg: NEUTRAL_RESOURCE_THEME ? 'bg-slate-800 text-white font-medium' : 'bg-amber-500/15 text-amber-300 font-medium',
     border: NEUTRAL_RESOURCE_THEME ? 'border-slate-700/60' : 'border-amber-500/30',
   },
+  image: {
+    icon: NEUTRAL_RESOURCE_THEME ? 'text-slate-400' : 'text-purple-400',
+    activeBg: NEUTRAL_RESOURCE_THEME ? 'bg-slate-800 text-white font-medium' : 'bg-purple-500/15 text-purple-300 font-medium',
+    border: NEUTRAL_RESOURCE_THEME ? 'border-slate-700/60' : 'border-purple-500/30',
+  },
+  event: {
+    icon: NEUTRAL_RESOURCE_THEME ? 'text-slate-400' : 'text-sky-400',
+    activeBg: NEUTRAL_RESOURCE_THEME ? 'bg-slate-800 text-white font-medium' : 'bg-sky-500/15 text-sky-300 font-medium',
+    border: NEUTRAL_RESOURCE_THEME ? 'border-slate-700/60' : 'border-sky-500/30',
+  },
 };
