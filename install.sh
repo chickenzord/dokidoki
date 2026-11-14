@@ -60,6 +60,8 @@ ADVERTISE_ADDR="${DOKIDOKI_ADVERTISE_ADDR:-}"
 ENABLE_MDNS="${DOKIDOKI_ENABLE_MDNS:-true}"
 IMAGE="${DOKIDOKI_IMAGE:-ghcr.io/chickenzord/dokidoki:latest}"
 DOCKER_SOCKET="${DOCKER_SOCKET:-/var/run/docker.sock}"
+DOKIDOKI_CONTAINER_USER="${DOKIDOKI_CONTAINER_USER:-}"
+NON_ROOT_REQUESTED=false
 
 INTERACTIVE=true
 NON_INTERACTIVE=false
@@ -94,12 +96,14 @@ OPTIONS:
       --disable-mdns           Disable LAN mDNS discovery (default: enabled)
       --image <image>          Dokidoki container image (default: ghcr.io/chickenzord/dokidoki:latest)
       --socket <path>          Path to Docker socket (default: /var/run/docker.sock)
+      --non-root               Run container as non-root user (<current_uid>:<docker_socket_gid>)
+      --user <uid:gid>         Run container as specific UID:GID
   -h, --help                   Show this help message
 
 ENVIRONMENT VARIABLES:
   DOKIDOKI_STACKS_DIR, DOKIDOKI_PORT, DOKIDOKI_NODE_NAME, DOKIDOKI_PASSWORD,
   DOKIDOKI_PEERS, DOKIDOKI_CLUSTER_TOKEN, DOKIDOKI_ADVERTISE_ADDR,
-  DOKIDOKI_ENABLE_MDNS, DOKIDOKI_IMAGE
+  DOKIDOKI_ENABLE_MDNS, DOKIDOKI_IMAGE, DOKIDOKI_CONTAINER_USER
 EOF
   exit 0
 }
@@ -156,6 +160,14 @@ while [[ $# -gt 0 ]]; do
       ;;
     --socket)
       DOCKER_SOCKET="$2"
+      shift 2
+      ;;
+    --non-root)
+      NON_ROOT_REQUESTED=true
+      shift
+      ;;
+    --user)
+      DOKIDOKI_CONTAINER_USER="$2"
       shift 2
       ;;
     -h|--help)
@@ -398,6 +410,11 @@ print_summary() {
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Cluster Token" "$masked_token"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Seed Peers" "$peers_display"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "mDNS Discovery" "$mdns_display"
+  local user_display="root (default)"
+  if [ -n "$DOKIDOKI_CONTAINER_USER" ]; then
+    user_display="$DOKIDOKI_CONTAINER_USER"
+  fi
+  printf "  ${CYAN}%-18s${RESET}: %s\n" "Container User" "$user_display"
   echo ""
 }
 
@@ -502,6 +519,15 @@ if [ "$INTERACTIVE" = true ] && [ "$NON_INTERACTIVE" = false ]; then
   fi
   CLUSTER_TOKEN="$(prompt_input "Cluster Security Token" "$SUGGESTED_TOKEN")"
   PEERS="$(prompt_input "Seed Peers (comma-separated, optional)" "$PEERS")"
+
+  # Container user (non-root) configuration
+  if [ -z "$DOKIDOKI_CONTAINER_USER" ] && [ "$NON_ROOT_REQUESTED" = false ]; then
+    if prompt_confirm "Run Dokidoki container as non-root user?" "n"; then
+      DETECTED_UID="$(id -u)"
+      DETECTED_GID="$(stat -c '%g' "${DOCKER_SOCKET}" 2>/dev/null || stat -f '%g' "${DOCKER_SOCKET}" 2>/dev/null || id -g)"
+      DOKIDOKI_CONTAINER_USER="$(prompt_input "Enter UID:GID to run container" "${DETECTED_UID}:${DETECTED_GID}")"
+    fi
+  fi
 else
   # In non-interactive mode
   if [ -z "$ADMIN_PASSWORD" ]; then
@@ -515,6 +541,13 @@ else
   if [ -z "$ADVERTISE_ADDR" ]; then
     ADVERTISE_ADDR="http://${DEFAULT_IP}:${PORT}"
   fi
+fi
+
+# Resolve non-root flag if provided
+if [ "$NON_ROOT_REQUESTED" = true ] && [ -z "$DOKIDOKI_CONTAINER_USER" ]; then
+  DETECTED_UID="$(id -u)"
+  DETECTED_GID="$(stat -c '%g' "${DOCKER_SOCKET}" 2>/dev/null || stat -f '%g' "${DOCKER_SOCKET}" 2>/dev/null || id -g)"
+  DOKIDOKI_CONTAINER_USER="${DETECTED_UID}:${DETECTED_GID}"
 fi
 
 # Print configuration summary before making actual changes
@@ -538,6 +571,11 @@ if ! mkdir -p "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki" 2>/dev/null; then
   warn "Permission denied writing to ${STACKS_DIR}, attempting with sudo..."
   sudo mkdir -p "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki"
   sudo chown -R "$(id -u):$(id -g)" "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki"
+fi
+
+if [ -n "$DOKIDOKI_CONTAINER_USER" ]; then
+  chown -R "$DOKIDOKI_CONTAINER_USER" "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki" 2>/dev/null || \
+    sudo chown -R "$DOKIDOKI_CONTAINER_USER" "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki" 2>/dev/null || true
 fi
 
 success "Directories ready: ${DOKIDOKI_DIR} and ${STACKS_DIR}/.dokidoki"
@@ -570,6 +608,9 @@ with open('$AUTH_FILE', 'w') as f:
 " 2>/dev/null || true
   fi
   chmod 600 "$AUTH_FILE" 2>/dev/null || sudo chmod 600 "$AUTH_FILE" 2>/dev/null || true
+  if [ -n "$DOKIDOKI_CONTAINER_USER" ]; then
+    chown "$DOKIDOKI_CONTAINER_USER" "$AUTH_FILE" 2>/dev/null || sudo chown "$DOKIDOKI_CONTAINER_USER" "$AUTH_FILE" 2>/dev/null || true
+  fi
 elif [ -n "$CLUSTER_TOKEN" ]; then
   cat << EOF > "$AUTH_FILE"
 {
@@ -578,6 +619,9 @@ elif [ -n "$CLUSTER_TOKEN" ]; then
 }
 EOF
   chmod 600 "$AUTH_FILE" 2>/dev/null || sudo chmod 600 "$AUTH_FILE" 2>/dev/null || true
+  if [ -n "$DOKIDOKI_CONTAINER_USER" ]; then
+    chown "$DOKIDOKI_CONTAINER_USER" "$AUTH_FILE" 2>/dev/null || sudo chown "$DOKIDOKI_CONTAINER_USER" "$AUTH_FILE" 2>/dev/null || true
+  fi
 fi
 
 # Build environment entries for compose (secrets kept out of compose.yaml)
@@ -601,6 +645,11 @@ fi
 # Write compose.yaml
 info "Generating ${COMPOSE_FILE}..."
 
+USER_LINE=""
+if [ -n "$DOKIDOKI_CONTAINER_USER" ]; then
+  USER_LINE="    user: \"${DOKIDOKI_CONTAINER_USER}\""
+fi
+
 cat << EOF > "$COMPOSE_FILE"
 # Dokidoki Fleet Manager Stack
 # Managed autonomously as a standard compose file.
@@ -609,7 +658,8 @@ services:
   dokidoki:
     image: ${IMAGE}
     container_name: dokidoki
-    restart: unless-stopped
+${USER_LINE:+${USER_LINE}
+}    restart: unless-stopped
     network_mode: host
     volumes:
       - "${DOCKER_SOCKET}:/var/run/docker.sock"
