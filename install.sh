@@ -524,7 +524,7 @@ if [ "$INTERACTIVE" = true ] && [ "$NON_INTERACTIVE" = false ]; then
   if [ -z "$DOKIDOKI_CONTAINER_USER" ] && [ "$NON_ROOT_REQUESTED" = false ]; then
     if prompt_confirm "Run Dokidoki container as non-root user?" "n"; then
       DETECTED_UID="$(id -u)"
-      DETECTED_GID="$(stat -c '%g' "${DOCKER_SOCKET}" 2>/dev/null || stat -f '%g' "${DOCKER_SOCKET}" 2>/dev/null || id -g)"
+      DETECTED_GID="$(id -g)"
       DOKIDOKI_CONTAINER_USER="$(prompt_input "Enter UID:GID to run container" "${DETECTED_UID}:${DETECTED_GID}")"
     fi
   fi
@@ -546,7 +546,7 @@ fi
 # Resolve non-root flag if provided
 if [ "$NON_ROOT_REQUESTED" = true ] && [ -z "$DOKIDOKI_CONTAINER_USER" ]; then
   DETECTED_UID="$(id -u)"
-  DETECTED_GID="$(stat -c '%g' "${DOCKER_SOCKET}" 2>/dev/null || stat -f '%g' "${DOCKER_SOCKET}" 2>/dev/null || id -g)"
+  DETECTED_GID="$(id -g)"
   DOKIDOKI_CONTAINER_USER="${DETECTED_UID}:${DETECTED_GID}"
 fi
 
@@ -648,6 +648,11 @@ info "Generating ${COMPOSE_FILE}..."
 USER_LINE=""
 if [ -n "$DOKIDOKI_CONTAINER_USER" ]; then
   USER_LINE="    user: \"${DOKIDOKI_CONTAINER_USER}\""
+  DOCKER_SOCKET_GID="$(stat -c '%g' "${DOCKER_SOCKET}" 2>/dev/null || stat -f '%g' "${DOCKER_SOCKET}" 2>/dev/null || true)"
+  USER_PRIMARY_GID="${DOKIDOKI_CONTAINER_USER#*:}"
+  if [ -n "$DOCKER_SOCKET_GID" ] && [ "$DOCKER_SOCKET_GID" != "$USER_PRIMARY_GID" ] && [ "$DOCKER_SOCKET_GID" != "0" ]; then
+    USER_LINE="${USER_LINE}\n    group_add:\n      - \"${DOCKER_SOCKET_GID}\""
+  fi
 fi
 
 cat << EOF > "$COMPOSE_FILE"
