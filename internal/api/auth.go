@@ -213,6 +213,15 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 // handleAuthLogin handles POST /api/v1/auth/login (Public)
 // Accepts {"password": "..."}
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
+	ip := clientIP(r)
+	if s.loginRateLimiter != nil {
+		if allowed, retryAfter := s.loginRateLimiter.Allow(ip); !allowed {
+			w.Header().Set("Retry-After", strconv.Itoa(retryAfter))
+			writeError(w, http.StatusTooManyRequests, "too many failed login attempts, please try again later")
+			return
+		}
+	}
+
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -230,6 +239,9 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 
 	if pwHash == "" {
 		// If still no password configured, login is allowed immediately or no-op
+		if s.loginRateLimiter != nil {
+			s.loginRateLimiter.Reset(ip)
+		}
 		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "no password configured"})
 		return
 	}
@@ -243,9 +255,16 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 			err = bcrypt.CompareHashAndPassword([]byte(pwHash), []byte(req.Password))
 		}
 		if err != nil {
+			if s.loginRateLimiter != nil {
+				s.loginRateLimiter.RecordFailure(ip)
+			}
 			writeError(w, http.StatusUnauthorized, "invalid password")
 			return
 		}
+	}
+
+	if s.loginRateLimiter != nil {
+		s.loginRateLimiter.Reset(ip)
 	}
 
 	expiry := time.Now().Add(SessionDuration)

@@ -98,6 +98,7 @@ func TestAuthEndpoints(t *testing.T) {
 	})
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", bytes.NewReader(changeBody))
 	req.AddCookie(sessionCookie)
+	req.Header.Set("X-Dokidoki-Client", "web")
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusOK, w.Code)
@@ -293,3 +294,160 @@ func TestAuthLiveReload(t *testing.T) {
 	require.NotEmpty(t, cookies)
 	assert.Equal(t, SessionCookieName, cookies[0].Name)
 }
+
+func TestLoginRateLimiting(t *testing.T) {
+	tempDir := t.TempDir()
+	password := "correct-password-123"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Bind:         "127.0.0.1",
+		Port:         8080,
+		StacksDir:    tempDir,
+		PasswordHash: string(hash),
+	}
+
+	server := NewServer(cfg, &mockDocker{}, nil, nil, "")
+	// Use shorter window for testing expiration (500ms > 5*65ms bcrypt delay)
+	limiter := NewLoginRateLimiter(5, 500*time.Millisecond)
+	server.WithLoginRateLimiter(limiter)
+	handler := server.Routes()
+
+	loginReq := func(ip, pw string) *httptest.ResponseRecorder {
+		body, _ := json.Marshal(map[string]string{"password": pw})
+		req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(body))
+		req.RemoteAddr = ip + ":12345"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, req)
+		return w
+	}
+
+	testIP := "198.51.100.5"
+
+	// 1. Five failed attempts
+	for i := 1; i <= 5; i++ {
+		w := loginReq(testIP, "wrong-pw")
+		assert.Equal(t, http.StatusUnauthorized, w.Code, "attempt %d should be 401", i)
+	}
+
+	// 2. 6th attempt should be blocked with 429 Too Many Requests
+	w := loginReq(testIP, "wrong-pw")
+	assert.Equal(t, http.StatusTooManyRequests, w.Code)
+	assert.NotEmpty(t, w.Header().Get("Retry-After"))
+	var errResp map[string]string
+	err = json.Unmarshal(w.Body.Bytes(), &errResp)
+	require.NoError(t, err)
+	assert.Equal(t, "too many failed login attempts, please try again later", errResp["error"])
+
+	// 3. Different IP is not blocked
+	otherIP := "198.51.100.6"
+	wOther := loginReq(otherIP, password)
+	assert.Equal(t, http.StatusOK, wOther.Code)
+
+	// 4. Wait for rate limit window to expire
+	time.Sleep(550 * time.Millisecond)
+
+	// 5. Attempt after expiry succeeds with correct password
+	wExpired := loginReq(testIP, password)
+	assert.Equal(t, http.StatusOK, wExpired.Code)
+
+	// 6. Test successful login resets failure counter
+	for i := 1; i <= 3; i++ {
+		w := loginReq(testIP, "wrong-pw")
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	}
+	// Successful login resets
+	wSuccess := loginReq(testIP, password)
+	assert.Equal(t, http.StatusOK, wSuccess.Code)
+
+	// Can fail another 4 times without 429
+	for i := 1; i <= 4; i++ {
+		w := loginReq(testIP, "wrong-pw")
+		assert.Equal(t, http.StatusUnauthorized, w.Code)
+	}
+}
+
+func TestCSRFProtectionMiddleware(t *testing.T) {
+	tempDir := t.TempDir()
+	password := "mypassword"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Bind:         "127.0.0.1",
+		Port:         8080,
+		StacksDir:    tempDir,
+		ClusterToken: "cluster-secret-token",
+		PasswordHash: string(hash),
+	}
+
+	server := NewServer(cfg, &mockDocker{}, nil, nil, "")
+	handler := server.Routes()
+
+	// Login to obtain valid session cookie
+	loginBody, _ := json.Marshal(map[string]string{"password": password})
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(loginBody))
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var sessionCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == SessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	require.NotNil(t, sessionCookie)
+
+	// 1. GET request with cookie does not require CSRF header
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/stacks", nil)
+	req.AddCookie(sessionCookie)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// 2. Mutating request (POST /api/v1/auth/change-password) with cookie and NO CSRF header -> 403 Forbidden
+	changeBody, _ := json.Marshal(map[string]string{
+		"current_password": password,
+		"new_password":     "newpassword123",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", bytes.NewReader(changeBody))
+	req.AddCookie(sessionCookie)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+	var errResp map[string]string
+	_ = json.Unmarshal(w.Body.Bytes(), &errResp)
+	assert.Equal(t, "missing required CSRF header", errResp["error"])
+
+	// 3. Mutating request with X-Dokidoki-Client header -> 200 OK
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", bytes.NewReader(changeBody))
+	req.AddCookie(sessionCookie)
+	req.Header.Set("X-Dokidoki-Client", "web")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// 4. Mutating request with X-Requested-With header -> 200 OK
+	changeBody2, _ := json.Marshal(map[string]string{
+		"current_password": "newpassword123",
+		"new_password":     "newpassword456",
+	})
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/change-password", bytes.NewReader(changeBody2))
+	req.AddCookie(sessionCookie)
+	req.Header.Set("X-Requested-With", "XMLHttpRequest")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// 5. Cluster machine request with X-Cluster-Token bypasses CSRF check
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/leave", nil)
+	req.Header.Set("X-Cluster-Token", "cluster-secret-token")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	// Response should not be 403 (either 200 or 400 bad request due to missing cluster manager / payload)
+	assert.NotEqual(t, http.StatusForbidden, w.Code)
+}
+

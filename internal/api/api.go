@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/config"
@@ -32,6 +33,7 @@ type Server struct {
 	selfContainerID string
 	webUI           http.Handler
 	sessionMgr      *SessionManager
+	loginRateLimiter *LoginRateLimiter
 	authMu          sync.RWMutex
 }
 
@@ -48,15 +50,17 @@ func NewServer(cfg *config.Config, dockerCli docker.Client, stackSvc StackServic
 		stackSvc = stack.NewService(stack.NewScanner(cfg.StacksDir), dockerCli, selfContainerID, stack.WithTaskRunner(taskRunner))
 	}
 	sessionMgr := NewSessionManager(cfg.ClusterToken)
+	loginRateLimiter := NewLoginRateLimiter(5, 1*time.Minute)
 	return &Server{
-		cfg:             cfg,
-		dockerCli:       dockerCli,
-		stackSvc:        stackSvc,
-		clusterSvc:      clusterSvc,
-		taskRunner:      taskRunner,
-		stacksDir:       cfg.StacksDir,
-		selfContainerID: selfContainerID,
-		sessionMgr:      sessionMgr,
+		cfg:              cfg,
+		dockerCli:        dockerCli,
+		stackSvc:         stackSvc,
+		clusterSvc:       clusterSvc,
+		taskRunner:       taskRunner,
+		stacksDir:        cfg.StacksDir,
+		selfContainerID:  selfContainerID,
+		sessionMgr:       sessionMgr,
+		loginRateLimiter: loginRateLimiter,
 	}
 }
 
@@ -149,6 +153,15 @@ func (s *Server) readOnlyMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// WithLoginRateLimiter overrides the default LoginRateLimiter (e.g. for testing).
+func (s *Server) WithLoginRateLimiter(rl *LoginRateLimiter) *Server {
+	if s.loginRateLimiter != nil {
+		s.loginRateLimiter.Stop()
+	}
+	s.loginRateLimiter = rl
+	return s
+}
+
 // Routes returns the configured http.Handler with all middleware and routes.
 func (s *Server) Routes() http.Handler {
 	r := chi.NewRouter()
@@ -160,7 +173,7 @@ func (s *Server) Routes() http.Handler {
 		r.Use(cors.Handler(cors.Options{
 			AllowedOrigins:   s.cfg.AllowedOrigins,
 			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Cluster-Token"},
+			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Cluster-Token", "X-Dokidoki-Client", "X-Requested-With"},
 			ExposedHeaders:   []string{"Link"},
 			AllowCredentials: true,
 			MaxAge:           300,
@@ -188,9 +201,10 @@ func (s *Server) Routes() http.Handler {
 		r.Post("/cluster/handshake", s.handleHandshake)
 		r.Post("/cluster/heartbeat", s.handleHeartbeat)
 
-		// 3. Protected User Endpoints (guarded by userAuthMiddleware)
+		// 3. Protected User Endpoints (guarded by userAuthMiddleware and csrfProtectionMiddleware)
 		r.Group(func(r chi.Router) {
 			r.Use(s.userAuthMiddleware)
+			r.Use(s.csrfProtectionMiddleware)
 
 			// Auth management
 			r.Post("/auth/change-password", s.handleAuthChangePassword)
@@ -268,6 +282,7 @@ func (s *Server) Routes() http.Handler {
 	// Mount resource routes directly under /api for convenience / compatibility (protected by userAuthMiddleware)
 	r.Route("/api", func(r chi.Router) {
 		r.Use(s.userAuthMiddleware)
+		r.Use(s.csrfProtectionMiddleware)
 		r.Group(func(r chi.Router) {
 			r.Use(chiMiddleware.Timeout(DefaultRequestTimeout))
 			r.Get("/networks", s.handleListNetworks)

@@ -125,6 +125,7 @@ class ApiService {
         signal: controller.signal,
         headers: {
           'Accept': 'application/json',
+          'X-Dokidoki-Client': 'web',
           ...(options?.headers || {}),
         },
       });
@@ -287,6 +288,7 @@ class ApiService {
       credentials: 'include',
       headers: {
         Accept: onChunk ? 'text/plain' : 'application/json',
+        'X-Dokidoki-Client': 'web',
       },
     });
 
