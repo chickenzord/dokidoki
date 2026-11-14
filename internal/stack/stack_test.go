@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/docker"
 	"github.com/chickenzord/dokidoki/internal/task"
 	"github.com/docker/docker/api/types"
@@ -2145,6 +2146,10 @@ func TestService_ContainerLogs(t *testing.T) {
 		if !strings.Contains(out.String(), "Container recreated") {
 			t.Errorf("expected logs streamed, got %q", out.String())
 		}
+		expectedCmd := "docker-compose -f compose.yaml up -d --remove-orphans"
+		if strings.Join(startedCfg.Command, " ") != expectedCmd {
+			t.Errorf("expected command %q, got %q", expectedCmd, strings.Join(startedCfg.Command, " "))
+		}
 	})
 
 	t.Run("ComposeRestart_SelfStack_DetachedTaskRunner", func(t *testing.T) {
@@ -2219,7 +2224,78 @@ func TestService_ContainerLogs(t *testing.T) {
 		if startedCfg.WorkingDir != stackDir {
 			t.Errorf("expected working dir %s, got %s", stackDir, startedCfg.WorkingDir)
 		}
-		expectedCmd := "docker compose -f compose.yaml restart web"
+		expectedCmd := "docker-compose -f compose.yaml restart web"
+		if strings.Join(startedCfg.Command, " ") != expectedCmd {
+			t.Errorf("expected command %q, got %q", expectedCmd, strings.Join(startedCfg.Command, " "))
+		}
+	})
+
+	t.Run("ComposeUp_SelfStack_CustomComposeRunnerBinary", func(t *testing.T) {
+		tempDir := t.TempDir()
+		stackDir := filepath.Join(tempDir, "dokidoki")
+		if err := os.MkdirAll(stackDir, 0755); err != nil {
+			t.Fatalf("failed to create stack dir: %v", err)
+		}
+		composePath := filepath.Join(stackDir, "compose.yaml")
+		if err := os.WriteFile(composePath, []byte("services:\n  dokidoki:\n    image: dokidoki:latest\n"), 0644); err != nil {
+			t.Fatalf("failed to write compose.yaml: %v", err)
+		}
+
+		selfID := "self-container-custom-runner"
+		mockDocker := &mockDockerClient{
+			listContainersFn: func(ctx context.Context) ([]types.Container, error) {
+				return []types.Container{
+					{
+						ID:    selfID,
+						Names: []string{"/dokidoki"},
+						State: "running",
+						Labels: map[string]string{
+							"com.docker.compose.project": "dokidoki",
+						},
+					},
+				}, nil
+			},
+		}
+
+		var startedCfg task.Config
+		mockTR := &mockTaskRunner{
+			startTaskFn: func(ctx context.Context, cfg task.Config) (*task.TaskInfo, error) {
+				startedCfg = cfg
+				exitZero := 0
+				return &task.TaskInfo{
+					ID:       "task-custom-bin",
+					Status:   task.StatusCompleted,
+					ExitCode: &exitZero,
+				}, nil
+			},
+			getTaskFn: func(ctx context.Context, id string) (*task.TaskInfo, error) {
+				exitZero := 0
+				return &task.TaskInfo{
+					ID:       id,
+					Status:   task.StatusCompleted,
+					ExitCode: &exitZero,
+				}, nil
+			},
+			tailTaskLogsFn: func(ctx context.Context, id string, out io.Writer, follow bool) error {
+				return nil
+			},
+		}
+
+		customBin := "/opt/stacks/.dokidoki/bin/docker-compose-v2.30.0"
+		cmdRunner := compose.NewRunner(customBin, "")
+
+		svc := NewService(NewScanner(tempDir), mockDocker, selfID, WithTaskRunner(mockTR), WithComposeRunner(cmdRunner))
+
+		var out bytes.Buffer
+		res, err := svc.ComposeUp(context.Background(), "dokidoki", &out)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if !res.Success {
+			t.Errorf("expected success true")
+		}
+
+		expectedCmd := customBin + " -f compose.yaml up -d --remove-orphans"
 		if strings.Join(startedCfg.Command, " ") != expectedCmd {
 			t.Errorf("expected command %q, got %q", expectedCmd, strings.Join(startedCfg.Command, " "))
 		}

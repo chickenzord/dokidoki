@@ -1096,6 +1096,28 @@ func (s *Service) ComposeUp(ctx context.Context, stackName string, out io.Writer
 	}, nil
 }
 
+// resolveComposeBin resolves the compose binary for a given composePath.
+func (s *Service) resolveComposeBin(ctx context.Context, composePath string, out io.Writer) string {
+	type stackResolver interface {
+		ResolveForStack(ctx context.Context, composePath string, out io.Writer) string
+	}
+	type binResolver interface {
+		Binary() string
+	}
+
+	if sr, ok := s.composeRunner.(stackResolver); ok {
+		if bin := sr.ResolveForStack(ctx, composePath, out); bin != "" {
+			return bin
+		}
+	}
+	if br, ok := s.composeRunner.(binResolver); ok {
+		if bin := br.Binary(); bin != "" {
+			return bin
+		}
+	}
+	return compose.DefaultBin
+}
+
 // runSelfComposeTask executes a compose command on Dokidoki's self stack in a detached helper container.
 func (s *Service) runSelfComposeTask(ctx context.Context, stackName string, composePath string, out io.Writer, composeSubcommand []string) (*OperationResult, error) {
 	taskRunner := s.getTaskRunner()
@@ -1103,7 +1125,14 @@ func (s *Service) runSelfComposeTask(ctx context.Context, stackName string, comp
 		return nil, errors.New("task runner unavailable")
 	}
 
-	cmdArgs := append([]string{"docker", "compose", "-f", filepath.Base(composePath)}, composeSubcommand...)
+	resolvedBin := s.resolveComposeBin(ctx, composePath, out)
+	baseArgs := strings.Fields(resolvedBin)
+	if len(baseArgs) == 0 {
+		baseArgs = []string{compose.DefaultBin}
+	}
+
+	cmdArgs := append(baseArgs, "-f", filepath.Base(composePath))
+	cmdArgs = append(cmdArgs, composeSubcommand...)
 	workingDir := filepath.Dir(composePath)
 
 	tInfo, err := taskRunner.StartTask(ctx, task.Config{

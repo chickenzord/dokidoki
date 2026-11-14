@@ -58,6 +58,14 @@ type CommandRunner struct {
 // Ensure CommandRunner implements Runner at compile time.
 var _ Runner = (*CommandRunner)(nil)
 
+// Binary returns the configured compose binary string.
+func (r *CommandRunner) Binary() string {
+	if strings.TrimSpace(r.bin) == "" {
+		return DefaultBin
+	}
+	return r.bin
+}
+
 // NewRunner creates a new CommandRunner instance.
 // If bin is empty, it defaults to "docker-compose".
 func NewRunner(bin string, dockerHost string) *CommandRunner {
@@ -300,4 +308,12 @@ func (r *MultiVersionRunner) Restart(ctx context.Context, composePath string, se
 // Pull runs `pull` dynamically resolving the compose binary.
 func (r *MultiVersionRunner) Pull(ctx context.Context, composePath string, out io.Writer) error {
 	return r.run(ctx, composePath, out, "pull")
+}
+
+// ResolveForStack resolves the compose binary for the specified compose file.
+func (r *MultiVersionRunner) ResolveForStack(ctx context.Context, composePath string, out io.Writer) string {
+	if r.mgr != nil {
+		return r.mgr.ResolveForStack(ctx, composePath, out)
+	}
+	return DefaultBin
 }
