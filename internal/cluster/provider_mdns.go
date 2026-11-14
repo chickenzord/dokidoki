@@ -54,7 +54,12 @@ func (p *MDNSProvider) Name() string {
 }
 
 // Start registers the mDNS service and begins browsing for peers.
+// If clusterToken is empty, mDNS advertisement and discovery are disabled.
 func (p *MDNSProvider) Start(ctx context.Context, events chan<- PeerEvent) error {
+	if p.clusterToken == "" {
+		slog.Debug("Cluster: mDNS discovery/advertisement disabled because cluster token is empty")
+		return nil
+	}
 	p.mu.Lock()
 	p.ctx, p.cancel = context.WithCancel(ctx)
 	p.mu.Unlock()

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -107,6 +108,13 @@ func (s *Server) handleHandshake(w http.ResponseWriter, r *http.Request) {
 		req.ClusterToken = r.Header.Get("X-Cluster-Token")
 	}
 
+	// Validate token at endpoint level
+	token := req.ClusterToken
+	if s.cfg == nil || s.cfg.ClusterToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.ClusterToken)) != 1 {
+		writeError(w, http.StatusUnauthorized, "invalid cluster token")
+		return
+	}
+
 	if s.clusterSvc == nil {
 		writeError(w, http.StatusServiceUnavailable, "cluster manager not initialized")
 		return
@@ -134,6 +142,13 @@ func (s *Server) handleHeartbeat(w http.ResponseWriter, r *http.Request) {
 	}
 	if msg.ClusterToken == "" {
 		msg.ClusterToken = r.Header.Get("X-Cluster-Token")
+	}
+
+	// Validate token at endpoint level
+	token := msg.ClusterToken
+	if s.cfg == nil || s.cfg.ClusterToken == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.ClusterToken)) != 1 {
+		writeError(w, http.StatusUnauthorized, "invalid cluster token")
+		return
 	}
 
 	if s.clusterSvc == nil {

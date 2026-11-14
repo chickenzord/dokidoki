@@ -682,20 +682,55 @@ func TestHostPing(t *testing.T) {
 
 func TestCORS(t *testing.T) {
 	m := &mockDocker{}
-	handler, _ := setupTestServer(t, m)
 
+	// 1. By default (no AllowedOrigins specified), CORS is disabled / restricted (no Access-Control-Allow-Origin header)
+	handlerDefault, _ := setupTestServer(t, m)
 	req := httptest.NewRequest(http.MethodOptions, "/api/v1/host", nil)
 	req.Header.Set("Origin", "http://example.com")
 	req.Header.Set("Access-Control-Request-Method", "GET")
 	w := httptest.NewRecorder()
-	handler.ServeHTTP(w, req)
+	handlerDefault.ServeHTTP(w, req)
+
+	origin := w.Header().Get("Access-Control-Allow-Origin")
+	if origin != "" {
+		t.Fatalf("expected empty CORS allow origin by default, got %q", origin)
+	}
+
+	// 2. When AllowedOrigins is explicitly configured, matching origins receive CORS headers
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Bind:           "127.0.0.1",
+		Port:           8080,
+		StacksDir:      tempDir,
+		AllowedOrigins: []string{"http://example.com"},
+	}
+	scanner := stack.NewScanner(tempDir)
+	stackSvc := stack.NewService(scanner, m, "")
+	server := NewServer(cfg, m, stackSvc, nil, "")
+	handlerConfigured := server.Routes()
+
+	req = httptest.NewRequest(http.MethodOptions, "/api/v1/host", nil)
+	req.Header.Set("Origin", "http://example.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w = httptest.NewRecorder()
+	handlerConfigured.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK && w.Code != http.StatusNoContent {
-		t.Fatalf("expected 200 or 204 for OPTIONS, got %d", w.Code)
+		t.Fatalf("expected 200 or 204 for OPTIONS with allowed origin, got %d", w.Code)
 	}
-	origin := w.Header().Get("Access-Control-Allow-Origin")
-	if origin != "*" && origin != "http://example.com" {
-		t.Fatalf("expected CORS allow origin, got %q", origin)
+	origin = w.Header().Get("Access-Control-Allow-Origin")
+	if origin != "http://example.com" {
+		t.Fatalf("expected 'http://example.com', got %q", origin)
+	}
+
+	// Non-matching origin does not receive CORS header
+	req = httptest.NewRequest(http.MethodOptions, "/api/v1/host", nil)
+	req.Header.Set("Origin", "http://evil.com")
+	req.Header.Set("Access-Control-Request-Method", "GET")
+	w = httptest.NewRecorder()
+	handlerConfigured.ServeHTTP(w, req)
+	if evilOrigin := w.Header().Get("Access-Control-Allow-Origin"); evilOrigin != "" {
+		t.Fatalf("expected empty CORS header for non-matching origin, got %q", evilOrigin)
 	}
 }
 
@@ -936,13 +971,15 @@ func TestClusterHeartbeat(t *testing.T) {
 }
 
 func TestClusterLeave(t *testing.T) {
-	handler, cm := setupClusterTestServer(t, "")
+	token := "leave-token"
+	handler, cm := setupClusterTestServer(t, token)
 
 	// Handshake to add a peer
 	_, _ = cm.HandleHandshake(cluster.HandshakeRequest{
-		NodeID:    "node-to-leave",
-		Name:      "leaving-node",
-		Addresses: []string{"http://10.0.0.9:8080"},
+		NodeID:       "node-to-leave",
+		Name:         "leaving-node",
+		Addresses:    []string{"http://10.0.0.9:8080"},
+		ClusterToken: token,
 	})
 	if _, ok := cm.GetNode("node-to-leave"); !ok {
 		t.Fatal("expected peer to be present before leave")
@@ -951,6 +988,7 @@ func TestClusterLeave(t *testing.T) {
 	// 1. Leave with JSON body
 	leaveBody, _ := json.Marshal(map[string]string{"node_id": "node-to-leave"})
 	req := httptest.NewRequest(http.MethodPost, "/api/v1/cluster/leave", bytes.NewReader(leaveBody))
+	req.Header.Set("X-Cluster-Token", token)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -973,6 +1011,7 @@ func TestClusterLeave(t *testing.T) {
 
 	// 2. Missing node_id -> 400
 	req = httptest.NewRequest(http.MethodPost, "/api/v1/cluster/leave", bytes.NewReader([]byte("{}")))
+	req.Header.Set("X-Cluster-Token", token)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -982,6 +1021,7 @@ func TestClusterLeave(t *testing.T) {
 
 	// 3. Manual DELETE /api/v1/nodes/{id}
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/node-to-leave", nil)
+	req.Header.Set("X-Cluster-Token", token)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 
@@ -994,6 +1034,7 @@ func TestClusterLeave(t *testing.T) {
 
 	// 4. Delete non-existent node -> 404
 	req = httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/non-existent", nil)
+	req.Header.Set("X-Cluster-Token", token)
 	w = httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
 	if w.Code != http.StatusNotFound {
@@ -1094,11 +1135,13 @@ func TestHeartbeatLogDebugLevel(t *testing.T) {
 	logger.Setup(&buf, lvlVar, "text", false)
 	defer logger.Setup(os.Stdout, slog.LevelInfo, "text", true)
 
-	handler, _ := setupClusterTestServer(t, "")
+	token := "debug-token"
+	handler, _ := setupClusterTestServer(t, token)
 
 	hbMsg := cluster.HeartbeatMessage{
-		NodeID:    "node-remote-hb",
-		Addresses: []string{"http://10.0.0.9:8080"},
+		NodeID:       "node-remote-hb",
+		Addresses:    []string{"http://10.0.0.9:8080"},
+		ClusterToken: token,
 	}
 	body, _ := json.Marshal(hbMsg)
 
@@ -2199,7 +2242,8 @@ func TestHandleDeleteNode(t *testing.T) {
 	selfNode := cluster.Node{ID: "self-node", Name: "Self", IsSelf: true}
 	peer1 := cluster.Node{ID: "peer-1", Name: "Peer 1"}
 
-	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080}
+	token := "test-cluster-token"
+	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080, ClusterToken: token}
 
 	t.Run("DeletePeerNodeSuccess", func(t *testing.T) {
 		var removedID string
@@ -2223,6 +2267,7 @@ func TestHandleDeleteNode(t *testing.T) {
 		handler := server.Routes()
 
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-1", nil)
+		req.Header.Set("X-Cluster-Token", token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
@@ -2254,6 +2299,7 @@ func TestHandleDeleteNode(t *testing.T) {
 		handler := server.Routes()
 
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-1?broadcast=false", nil)
+		req.Header.Set("X-Cluster-Token", token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
@@ -2280,6 +2326,7 @@ func TestHandleDeleteNode(t *testing.T) {
 		handler := server.Routes()
 
 		req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/self-node", nil)
+		req.Header.Set("X-Cluster-Token", token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
@@ -2313,7 +2360,8 @@ func (m *mockClusterHookService) LeaveCluster(ctx context.Context) error {
 }
 
 func TestHandleAddNode(t *testing.T) {
-	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080}
+	token := "test-cluster-token"
+	cfg := &config.Config{Bind: "127.0.0.1", Port: 8080, ClusterToken: token}
 
 	t.Run("Success", func(t *testing.T) {
 		mockCluster := &mockClusterService{
@@ -2331,6 +2379,7 @@ func TestHandleAddNode(t *testing.T) {
 
 		body := bytes.NewBufferString(`{"address":"http://192.168.1.100:8080"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		req.Header.Set("X-Cluster-Token", token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
@@ -2353,6 +2402,7 @@ func TestHandleAddNode(t *testing.T) {
 
 		body := bytes.NewBufferString(`{"address":""}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		req.Header.Set("X-Cluster-Token", token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
@@ -2372,6 +2422,7 @@ func TestHandleAddNode(t *testing.T) {
 
 		body := bytes.NewBufferString(`{"address":"http://192.168.1.100:8080"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		req.Header.Set("X-Cluster-Token", "wrong-token")
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 
@@ -2391,6 +2442,7 @@ func TestHandleAddNode(t *testing.T) {
 
 		body := bytes.NewBufferString(`{"address":"http://192.168.1.100:8080"}`)
 		req := httptest.NewRequest(http.MethodPost, "/api/v1/nodes", body)
+		req.Header.Set("X-Cluster-Token", token)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 

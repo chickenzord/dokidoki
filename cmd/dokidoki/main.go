@@ -1,10 +1,12 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,6 +23,8 @@ import (
 	"github.com/chickenzord/dokidoki/internal/logger"
 	"github.com/chickenzord/dokidoki/internal/stack"
 	"github.com/chickenzord/dokidoki/internal/task"
+	"golang.org/x/crypto/bcrypt"
+	"golang.org/x/term"
 )
 
 var (
@@ -45,6 +49,65 @@ func main() {
 			slog.Error("Failed to encode files to JSON", "error", err)
 			os.Exit(1)
 		}
+		os.Exit(0)
+	}
+
+	if len(os.Args) > 1 && os.Args[1] == "set-password" {
+		stacksDir := os.Getenv("DOKIDOKI_STACKS_DIR")
+		if stacksDir == "" {
+			stacksDir = config.DefaultStacksDir
+		}
+
+		var password string
+		if len(os.Args) > 2 {
+			password = os.Args[2]
+		} else {
+			if term.IsTerminal(int(syscall.Stdin)) {
+				fmt.Print("Enter password: ")
+				pwBytes, err := term.ReadPassword(int(syscall.Stdin))
+				fmt.Println()
+				if err != nil {
+					slog.Error("Failed to read password from terminal", "error", err)
+					os.Exit(1)
+				}
+				password = string(pwBytes)
+			} else {
+				// Read from stdin pipe
+				scanner := bufio.NewScanner(os.Stdin)
+				if scanner.Scan() {
+					password = scanner.Text()
+				}
+				if err := scanner.Err(); err != nil {
+					slog.Error("Failed to read password from stdin", "error", err)
+					os.Exit(1)
+				}
+			}
+		}
+
+		if strings.TrimSpace(password) == "" {
+			slog.Error("Password cannot be empty")
+			os.Exit(1)
+		}
+
+		hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+		if err != nil {
+			slog.Error("Failed to hash password", "error", err)
+			os.Exit(1)
+		}
+
+		authPath := config.AuthFilePath(stacksDir)
+		authCfg, err := config.LoadAuthConfig(authPath)
+		if err != nil {
+			authCfg = &config.AuthConfig{Version: 1}
+		}
+
+		authCfg.AdminPasswordHash = string(hash)
+		if err := config.SaveAuthConfig(authPath, authCfg); err != nil {
+			slog.Error("Failed to save auth config", "path", authPath, "error", err)
+			os.Exit(1)
+		}
+
+		fmt.Printf("Password successfully updated in %s\n", authPath)
 		os.Exit(0)
 	}
 

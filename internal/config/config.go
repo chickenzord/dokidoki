@@ -7,6 +7,8 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+
+	"golang.org/x/crypto/bcrypt"
 )
 
 const (
@@ -36,6 +38,8 @@ type Config struct {
 	AdvertiseAddrs   []string
 	Peers            []string
 	ClusterToken     string
+	PasswordHash     string
+	AllowedOrigins   []string
 	EnableMDNS       bool
 	ReadOnly         bool
 	LogLevel         string
@@ -104,6 +108,20 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 		cfg.StacksDir = val
 		cfg.ComposeCacheDir = filepath.Join(cfg.StacksDir, ".dokidoki", "bin")
 	}
+
+	// Load auth.json if present
+	authPath := AuthFilePath(cfg.StacksDir)
+	if authCfg, err := LoadAuthConfig(authPath); err == nil && authCfg != nil {
+		if authCfg.ClusterToken != "" {
+			cfg.ClusterToken = authCfg.ClusterToken
+		}
+		if authCfg.AdminPasswordHash != "" {
+			cfg.PasswordHash = authCfg.AdminPasswordHash
+		}
+	} else if err != nil && !IsNotExist(err) {
+		// If auth file exists but cannot be loaded safely (e.g. insecure permissions that couldn't be fixed)
+		return nil, fmt.Errorf("failed to load auth config: %w", err)
+	}
 	if val, ok := envMap["DOCKER_HOST"]; ok && val != "" {
 		cfg.DockerHost = val
 	}
@@ -133,6 +151,19 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 	}
 	if val, ok := envMap["DOKIDOKI_CLUSTER_TOKEN"]; ok {
 		cfg.ClusterToken = strings.TrimSpace(val)
+	}
+	if val, ok := envMap["DOKIDOKI_PASSWORD"]; ok && val != "" {
+		hash, err := bcrypt.GenerateFromPassword([]byte(val), bcrypt.DefaultCost)
+		if err != nil {
+			return nil, fmt.Errorf("failed to hash DOKIDOKI_PASSWORD: %w", err)
+		}
+		cfg.PasswordHash = string(hash)
+	}
+	if val, ok := envMap["DOKIDOKI_PASSWORD_HASH"]; ok && strings.TrimSpace(val) != "" {
+		cfg.PasswordHash = strings.TrimSpace(val)
+	}
+	if val, ok := envMap["DOKIDOKI_ALLOWED_ORIGINS"]; ok {
+		cfg.AllowedOrigins = parseCommaSeparated(val)
 	}
 	if val, ok := envMap["DOKIDOKI_ENABLE_MDNS"]; ok && strings.TrimSpace(val) != "" {
 		enableMDNS, err := strconv.ParseBool(strings.TrimSpace(val))
@@ -180,10 +211,12 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 
 	var advertiseAddrFlag string
 	var peersFlag string
+	var allowedOriginsFlag string
 	var verboseFlag bool
 	var debugFlag bool
 	fs.StringVar(&advertiseAddrFlag, "advertise-addr", strings.Join(cfg.AdvertiseAddrs, ","), "Comma-separated advertised addresses")
 	fs.StringVar(&peersFlag, "peers", strings.Join(cfg.Peers, ","), "Comma-separated seed peers")
+	fs.StringVar(&allowedOriginsFlag, "allowed-origins", strings.Join(cfg.AllowedOrigins, ","), "Comma-separated allowed CORS origins")
 	fs.StringVar(&cfg.ClusterToken, "cluster-token", cfg.ClusterToken, "Cluster security authentication token")
 	fs.BoolVar(&cfg.EnableMDNS, "enable-mdns", cfg.EnableMDNS, "Enable LAN mDNS discovery")
 	fs.BoolVar(&cfg.ReadOnly, "read-only", cfg.ReadOnly, "Enable read-only mode to prevent state changes")
@@ -207,6 +240,8 @@ func LoadFrom(args []string, environ []string) (*Config, error) {
 			cfg.AdvertiseAddrs = parseCommaSeparated(advertiseAddrFlag)
 		case "peers":
 			cfg.Peers = parseCommaSeparated(peersFlag)
+		case "allowed-origins":
+			cfg.AllowedOrigins = parseCommaSeparated(allowedOriginsFlag)
 		}
 	})
 

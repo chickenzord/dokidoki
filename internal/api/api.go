@@ -2,7 +2,9 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -28,6 +30,7 @@ type Server struct {
 	stacksDir       string
 	selfContainerID string
 	webUI           http.Handler
+	sessionMgr      *SessionManager
 }
 
 // NewServer creates a new API Server instance.
@@ -42,6 +45,7 @@ func NewServer(cfg *config.Config, dockerCli docker.Client, stackSvc StackServic
 	if stackSvc == nil {
 		stackSvc = stack.NewService(stack.NewScanner(cfg.StacksDir), dockerCli, selfContainerID, stack.WithTaskRunner(taskRunner))
 	}
+	sessionMgr := NewSessionManager(cfg.ClusterToken)
 	return &Server{
 		cfg:             cfg,
 		dockerCli:       dockerCli,
@@ -50,6 +54,7 @@ func NewServer(cfg *config.Config, dockerCli docker.Client, stackSvc StackServic
 		taskRunner:      taskRunner,
 		stacksDir:       cfg.StacksDir,
 		selfContainerID: selfContainerID,
+		sessionMgr:      sessionMgr,
 	}
 }
 
@@ -72,6 +77,63 @@ func NewRouter(cfg *config.Config, dockerCli docker.Client, stackSvc StackServic
 	return s.Routes()
 }
 
+// isLoopbackRequest returns true if the request remote IP is loopback or if RemoteAddr is empty or httptest default.
+func isLoopbackRequest(r *http.Request) bool {
+	if r.RemoteAddr == "" || strings.HasPrefix(r.RemoteAddr, "192.0.2.1:") || r.RemoteAddr == "192.0.2.1" {
+		return true
+	}
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
+	}
+	ip := net.ParseIP(host)
+	if ip == nil {
+		return host == "localhost" || host == "127.0.0.1" || host == "::1"
+	}
+	return ip.IsLoopback()
+}
+
+// clusterAuthMiddleware enforces X-Cluster-Token matching cfg.ClusterToken via constant-time comparison.
+func (s *Server) clusterAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("X-Cluster-Token")
+		if s.cfg == nil || s.cfg.ClusterToken == "" {
+			writeError(w, http.StatusUnauthorized, "cluster token not configured")
+			return
+		}
+		// If header is missing, check query parameter (for backwards compatibility if needed)
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.ClusterToken)) != 1 {
+			writeError(w, http.StatusUnauthorized, "invalid cluster token")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// userAuthMiddleware enforces session cookie or loopback access if no password configured.
+func (s *Server) userAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if s.isSessionValid(r) {
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if s.cfg == nil || s.cfg.PasswordHash == "" {
+			if isLoopbackRequest(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeError(w, http.StatusUnauthorized, "authentication required for remote access")
+			return
+		}
+
+		writeError(w, http.StatusUnauthorized, "authentication required")
+	})
+}
+
 // readOnlyMiddleware returns an HTTP middleware that rejects mutating requests with 403 Forbidden
 // when the node is configured in read-only mode.
 func (s *Server) readOnlyMiddleware(next http.Handler) http.Handler {
@@ -91,94 +153,118 @@ func (s *Server) Routes() http.Handler {
 	// Setup middleware
 	r.Use(HTTPLogger())
 	r.Use(chiMiddleware.Recoverer)
-	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token"},
-		ExposedHeaders:   []string{"Link"},
-		AllowCredentials: false,
-		MaxAge:           300,
-	}))
+	if s.cfg != nil && len(s.cfg.AllowedOrigins) > 0 {
+		r.Use(cors.Handler(cors.Options{
+			AllowedOrigins:   s.cfg.AllowedOrigins,
+			AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+			AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type", "X-CSRF-Token", "X-Cluster-Token"},
+			ExposedHeaders:   []string{"Link"},
+			AllowCredentials: true,
+			MaxAge:           300,
+		}))
+	}
 
 	// API v1 routes
 	r.Route("/api/v1", func(r chi.Router) {
-		// Non-streaming REST routes protected by timeout
+		// 1. Public Allowlist
+		r.Get("/host/ping", s.handlePing)
+		r.Get("/auth/me", s.handleAuthMe)
+		r.Post("/auth/login", s.handleAuthLogin)
+		r.Post("/auth/logout", s.handleAuthLogout)
+
+		// 2. Cluster Endpoints
+		// Note: handleHandshake and handleHeartbeat also check token in payload or X-Cluster-Token.
+		// All cluster routes require valid cluster token.
 		r.Group(func(r chi.Router) {
-			r.Use(chiMiddleware.Timeout(DefaultRequestTimeout))
+			r.Use(s.clusterAuthMiddleware)
 
-			// Read-only queries (Stacks)
-			r.Get("/stacks", s.handleListStacks)
-			r.Get("/stacks/{name}", s.handleGetStack)
-			r.Get("/stacks/{name}/compose", s.handleGetStackCompose)
-			r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
-			r.Get("/stacks/{name}/files", s.handleGetStackFiles)
-			r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
-
-			// Read-only queries (Containers)
-			r.Get("/containers", s.handleListContainers)
-			r.Get("/containers/{id}", s.handleInspectContainer)
-			r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
-
-			// Docker engine resources (Networks, Volumes, Images)
-			r.Get("/networks", s.handleListNetworks)
-			r.Get("/networks/{id}", s.handleGetNetwork)
-			r.Get("/volumes", s.handleListVolumes)
-			r.Get("/volumes/{id}", s.handleGetVolume)
-			r.Get("/images", s.handleListImages)
-			r.Get("/images/{id}", s.handleGetImage)
-
-			// Tasks routes (metadata)
-			r.Get("/tasks", s.handleListTasks)
-			r.Get("/tasks/{id}", s.handleGetTask)
-
-			// Host routes
-			r.Get("/host", s.handleHostInfo)
-			r.Get("/host/ping", s.handlePing)
-
-			// Cluster discovery & membership routes (must remain accessible in read-only mode)
-			r.Get("/nodes", s.handleListNodes)
-			r.Post("/nodes", s.handleAddNode)
-			r.Get("/nodes/{id}", s.handleGetNode)
-			r.Delete("/nodes/{id}", s.handleDeleteNode)
-			r.Post("/cluster/handshake", s.handleHandshake)
-			r.Post("/cluster/heartbeat", s.handleHeartbeat)
 			r.Post("/cluster/leave", s.handleLeave)
+			r.Post("/nodes", s.handleAddNode)
+			r.Delete("/nodes/{id}", s.handleDeleteNode)
+		})
+		r.Post("/cluster/handshake", s.handleHandshake)
+		r.Post("/cluster/heartbeat", s.handleHeartbeat)
 
-			// Mutating REST operations guarded by read-only mode
+		// 3. Protected User Endpoints (guarded by userAuthMiddleware)
+		r.Group(func(r chi.Router) {
+			r.Use(s.userAuthMiddleware)
+
+			// Auth management
+			r.Post("/auth/change-password", s.handleAuthChangePassword)
+
+			// Non-streaming REST routes protected by timeout
 			r.Group(func(r chi.Router) {
+				r.Use(chiMiddleware.Timeout(DefaultRequestTimeout))
+
+				// Read-only queries (Stacks)
+				r.Get("/stacks", s.handleListStacks)
+				r.Get("/stacks/{name}", s.handleGetStack)
+				r.Get("/stacks/{name}/compose", s.handleGetStackCompose)
+				r.Get("/stacks/{name}/containers", s.handleGetStackContainers)
+				r.Get("/stacks/{name}/files", s.handleGetStackFiles)
+				r.Get("/stacks/{name}/files/{filename}", s.handleGetStackFile)
+
+				// Read-only queries (Containers)
+				r.Get("/containers", s.handleListContainers)
+				r.Get("/containers/{id}", s.handleInspectContainer)
+				r.Get("/containers/{id}/compose", s.handleGetContainerCompose)
+
+				// Docker engine resources (Networks, Volumes, Images)
+				r.Get("/networks", s.handleListNetworks)
+				r.Get("/networks/{id}", s.handleGetNetwork)
+				r.Get("/volumes", s.handleListVolumes)
+				r.Get("/volumes/{id}", s.handleGetVolume)
+				r.Get("/images", s.handleListImages)
+				r.Get("/images/{id}", s.handleGetImage)
+
+				// Tasks routes (metadata)
+				r.Get("/tasks", s.handleListTasks)
+				r.Get("/tasks/{id}", s.handleGetTask)
+
+				// Host routes
+				r.Get("/host", s.handleHostInfo)
+
+				// Cluster discovery (read-only node queries remain accessible to users)
+				r.Get("/nodes", s.handleListNodes)
+				r.Get("/nodes/{id}", s.handleGetNode)
+
+				// Mutating REST operations guarded by read-only mode
+				r.Group(func(r chi.Router) {
+					r.Use(s.readOnlyMiddleware)
+
+					r.Post("/stacks", s.handleCreateStack)
+					r.Put("/stacks/{name}", s.handleUpdateStack)
+					r.Post("/containers/{id}/restart", s.handleRestartContainer)
+					r.Post("/containers/{id}/start", s.handleStartContainer)
+					r.Post("/containers/{id}/stop", s.handleStopContainer)
+				})
+			})
+
+			// Long-running streaming operations (compose up/down/restart/pull, container pull)
+			r.Group(func(r chi.Router) {
+				r.Use(SlidingDeadlineMiddleware(DefaultStreamingIdleTimeout))
 				r.Use(s.readOnlyMiddleware)
 
-				r.Post("/stacks", s.handleCreateStack)
-				r.Put("/stacks/{name}", s.handleUpdateStack)
-				r.Post("/containers/{id}/restart", s.handleRestartContainer)
-				r.Post("/containers/{id}/start", s.handleStartContainer)
-				r.Post("/containers/{id}/stop", s.handleStopContainer)
+				r.Post("/stacks/{name}/up", s.handleComposeUp)
+				r.Post("/stacks/{name}/down", s.handleComposeDown)
+				r.Post("/stacks/{name}/restart", s.handleComposeRestart)
+				r.Post("/stacks/{name}/pull", s.handleComposePull)
+				r.Post("/containers/{id}/pull", s.handlePullContainer)
 			})
+
+			// Long-lived streaming log and event routes (SSE / plain text follow)
+			r.Get("/containers/{id}/logs", s.handleContainerLogs)
+			r.Get("/tasks/{id}/logs", s.handleTaskLogs)
+			r.Get("/events", s.handleDockerEvents)
+
+			// Cluster proxy route (can proxy streaming requests to worker nodes)
+			r.HandleFunc("/nodes/{id}/proxy/*", s.handleProxyNode)
 		})
-
-		// Long-running streaming operations (compose up/down/restart/pull, container pull)
-		r.Group(func(r chi.Router) {
-			r.Use(SlidingDeadlineMiddleware(DefaultStreamingIdleTimeout))
-			r.Use(s.readOnlyMiddleware)
-
-			r.Post("/stacks/{name}/up", s.handleComposeUp)
-			r.Post("/stacks/{name}/down", s.handleComposeDown)
-			r.Post("/stacks/{name}/restart", s.handleComposeRestart)
-			r.Post("/stacks/{name}/pull", s.handleComposePull)
-			r.Post("/containers/{id}/pull", s.handlePullContainer)
-		})
-
-		// Long-lived streaming log and event routes (SSE / plain text follow)
-		r.Get("/containers/{id}/logs", s.handleContainerLogs)
-		r.Get("/tasks/{id}/logs", s.handleTaskLogs)
-		r.Get("/events", s.handleDockerEvents)
-
-		// Cluster proxy route (can proxy streaming requests to worker nodes)
-		r.HandleFunc("/nodes/{id}/proxy/*", s.handleProxyNode)
 	})
 
-	// Mount resource routes directly under /api for convenience / compatibility
+	// Mount resource routes directly under /api for convenience / compatibility (protected by userAuthMiddleware)
 	r.Route("/api", func(r chi.Router) {
+		r.Use(s.userAuthMiddleware)
 		r.Group(func(r chi.Router) {
 			r.Use(chiMiddleware.Timeout(DefaultRequestTimeout))
 			r.Get("/networks", s.handleListNetworks)

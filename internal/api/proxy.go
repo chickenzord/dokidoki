@@ -55,6 +55,12 @@ func (s *Server) handleProxyNode(w http.ResponseWriter, r *http.Request) {
 		subPath = "/" + subPath
 	}
 
+	// Validate subPath: must begin with /api/v1/ and must NOT contain /proxy (prevent proxy loops)
+	if !strings.HasPrefix(subPath, "/api/v1/") || strings.Contains(subPath, "/proxy") {
+		writeError(w, http.StatusBadRequest, "invalid proxy path")
+		return
+	}
+
 	proxy := &httputil.ReverseProxy{
 		Director: func(outReq *http.Request) {
 			outReq.URL.Scheme = targetURL.Scheme
@@ -63,7 +69,10 @@ func (s *Server) handleProxyNode(w http.ResponseWriter, r *http.Request) {
 			outReq.URL.RawQuery = r.URL.RawQuery
 			outReq.Host = targetURL.Host
 
-			if s.cfg.ClusterToken != "" {
+			// Strip any incoming client X-Cluster-Token headers before proxying
+			outReq.Header.Del("X-Cluster-Token")
+
+			if s.cfg != nil && s.cfg.ClusterToken != "" {
 				outReq.Header.Set("X-Cluster-Token", s.cfg.ClusterToken)
 			}
 		},

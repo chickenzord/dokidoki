@@ -245,13 +245,14 @@ func TestManagerTTLEviction(t *testing.T) {
 		Name: "Self",
 	}
 	ttl := 100 * time.Millisecond
-	mgr := NewManager(selfNode, "", ttl, nil, "")
+	mgr := NewManager(selfNode, "test-token", ttl, nil, "")
 
 	// Add peer
 	peerID := "peer-expiring"
 	_, err := mgr.HandleHandshake(HandshakeRequest{
-		NodeID: peerID,
-		Name:   "Peer Expiring",
+		NodeID:       peerID,
+		Name:         "Peer Expiring",
+		ClusterToken: "test-token",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -356,36 +357,47 @@ func TestManagerTokenValidation(t *testing.T) {
 		}
 	})
 
-	t.Run("OpenClusterNoTokenRequired", func(t *testing.T) {
+	t.Run("EmptyTokenStandaloneRejected", func(t *testing.T) {
 		mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
 
-		// Handshake with empty token succeeds
+		// Handshake when standalone (no token set) is rejected
 		_, err := mgr.HandleHandshake(HandshakeRequest{
 			NodeID: "peer-open",
 			Name:   "Peer Open",
 		})
-		if err != nil {
-			t.Errorf("expected success for open cluster, got: %v", err)
+		if err != ErrInvalidToken {
+			t.Errorf("expected ErrInvalidToken for standalone node, got: %v", err)
 		}
 
-		// Heartbeat with empty token succeeds
+		// Handshake even with a token sent is rejected
+		_, err = mgr.HandleHandshake(HandshakeRequest{
+			NodeID:       "peer-open",
+			Name:         "Peer Open",
+			ClusterToken: "any-token",
+		})
+		if err != ErrInvalidToken {
+			t.Errorf("expected ErrInvalidToken for standalone node, got: %v", err)
+		}
+
+		// Heartbeat with empty token is rejected
 		err = mgr.HandleHeartbeat(HeartbeatMessage{
 			NodeID: "peer-open",
 		})
-		if err != nil {
-			t.Errorf("expected heartbeat success for open cluster, got: %v", err)
+		if err != ErrInvalidToken {
+			t.Errorf("expected ErrInvalidToken on heartbeat for standalone node, got: %v", err)
 		}
 	})
 }
 
 func TestPEXMerge(t *testing.T) {
 	selfNode := Node{ID: "self", Name: "Self"}
-	mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
+	mgr := NewManager(selfNode, "pex-token", 30*time.Second, nil, "")
 
 	// Heartbeat introduces sender node and peer-3 via KnownPeers
 	err := mgr.HandleHeartbeat(HeartbeatMessage{
-		NodeID:    "peer-2",
-		Addresses: []string{"http://10.0.0.2:8080"},
+		NodeID:       "peer-2",
+		ClusterToken: "pex-token",
+		Addresses:    []string{"http://10.0.0.2:8080"},
 		KnownPeers: []Node{
 			{
 				ID:        "peer-3",
@@ -550,7 +562,7 @@ func TestManagerLifecycleAndEventConsumption(t *testing.T) {
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
 
-	mgr := NewManager(selfNode, "", 200*time.Millisecond, nil, "")
+	mgr := NewManager(selfNode, "test-lifecycle-token", 200*time.Millisecond, nil, "")
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -603,14 +615,15 @@ func TestManagerPeerPersistence(t *testing.T) {
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
 
-	mgr1 := NewManager(selfNode, "", 30*time.Second, nil, tempDir)
+	mgr1 := NewManager(selfNode, "persist-tok", 30*time.Second, nil, tempDir)
 
 	// Add peer via handshake
 	_, err := mgr1.HandleHandshake(HandshakeRequest{
-		NodeID:    "peer-discovered-1",
-		Name:      "Discovered 1",
-		Addresses: []string{"http://192.168.1.100:8080"},
-		Version:   "0.1.0",
+		NodeID:       "peer-discovered-1",
+		Name:         "Discovered 1",
+		Addresses:    []string{"http://192.168.1.100:8080"},
+		Version:      "0.1.0",
+		ClusterToken: "persist-tok",
 	})
 	if err != nil {
 		t.Fatalf("handshake error: %v", err)
@@ -631,7 +644,7 @@ func TestManagerPeerPersistence(t *testing.T) {
 	}
 
 	// Start mgr2 with the same tempDir (simulating restart)
-	mgr2 := NewManager(selfNode, "", 30*time.Second, nil, tempDir)
+	mgr2 := NewManager(selfNode, "persist-tok", 30*time.Second, nil, tempDir)
 
 	// Verify peer was restored on mgr2
 	peer, ok := mgr2.GetNode("peer-discovered-1")
@@ -663,11 +676,12 @@ func TestManagerNodeDefensiveCopy(t *testing.T) {
 		Name:      "Self Copy",
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
-	mgr := NewManager(selfNode, "", 30*time.Second, nil, "")
+	mgr := NewManager(selfNode, "copy-token", 30*time.Second, nil, "")
 	_, err := mgr.HandleHandshake(HandshakeRequest{
-		NodeID:    "peer-copy-1",
-		Name:      "Peer Copy 1",
-		Addresses: []string{"http://192.168.1.50:8080"},
+		NodeID:       "peer-copy-1",
+		Name:         "Peer Copy 1",
+		Addresses:    []string{"http://192.168.1.50:8080"},
+		ClusterToken: "copy-token",
 	})
 	if err != nil {
 		t.Fatalf("handshake failed: %v", err)
@@ -788,11 +802,12 @@ func TestManagerStopContextTimeout(t *testing.T) {
 		ID:        "self-timeout",
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
-	mgr := NewManager(selfNode, "", 30*time.Second, hangServer.Client(), "")
+	mgr := NewManager(selfNode, "stop-token", 30*time.Second, hangServer.Client(), "")
 
 	_, err := mgr.HandleHandshake(HandshakeRequest{
-		NodeID:    "hanging-peer",
-		Addresses: []string{hangServer.URL},
+		NodeID:       "hanging-peer",
+		Addresses:    []string{hangServer.URL},
+		ClusterToken: "stop-token",
 	})
 	if err != nil {
 		t.Fatalf("handshake failed: %v", err)
@@ -844,13 +859,14 @@ func TestManagerStopConcurrentLeaveNotifications(t *testing.T) {
 		ID:        "self-concurrent",
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
-	mgr := NewManager(selfNode, "", 30*time.Second, server.Client(), "")
+	mgr := NewManager(selfNode, "stop-token", 30*time.Second, server.Client(), "")
 
 	// Register 4 peers pointing to the test server
 	for i := 1; i <= 4; i++ {
 		_, err := mgr.HandleHandshake(HandshakeRequest{
-			NodeID:    fmt.Sprintf("peer-%d", i),
-			Addresses: []string{server.URL},
+			NodeID:       fmt.Sprintf("peer-%d", i),
+			Addresses:    []string{server.URL},
+			ClusterToken: "stop-token",
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -878,7 +894,7 @@ func TestManagerConcurrentPersistence(t *testing.T) {
 		ID:        "self-concurrent-persist",
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
-	mgr := NewManager(selfNode, "", 10*time.Second, nil, tempDir)
+	mgr := NewManager(selfNode, "concurrent-token", 10*time.Second, nil, tempDir)
 
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
@@ -887,13 +903,15 @@ func TestManagerConcurrentPersistence(t *testing.T) {
 		go func(id string) {
 			defer wg.Done()
 			_, _ = mgr.HandleHandshake(HandshakeRequest{
-				NodeID:    id,
-				Name:      "Node " + id,
-				Addresses: []string{"http://10.0.0.1:8080"},
+				NodeID:       id,
+				Name:         "Node " + id,
+				Addresses:    []string{"http://10.0.0.1:8080"},
+				ClusterToken: "concurrent-token",
 			})
 			_ = mgr.HandleHeartbeat(HeartbeatMessage{
-				NodeID:    id,
-				Addresses: []string{"http://10.0.0.1:8081"},
+				NodeID:       id,
+				Addresses:    []string{"http://10.0.0.1:8081"},
+				ClusterToken: "concurrent-token",
 			})
 		}(nodeID)
 	}
@@ -914,13 +932,14 @@ func TestTombstonePersistenceAndFiltering(t *testing.T) {
 		ID:        "self-tombstone",
 		Addresses: []string{"http://127.0.0.1:8080"},
 	}
-	mgr := NewManager(selfNode, "", 10*time.Second, nil, tempDir)
+	mgr := NewManager(selfNode, "tomb-token", 10*time.Second, nil, tempDir)
 
 	// Register peer-1
 	_, err := mgr.HandleHandshake(HandshakeRequest{
-		NodeID:    "peer-1",
-		Name:      "Peer 1",
-		Addresses: []string{"http://10.0.0.1:8080"},
+		NodeID:       "peer-1",
+		Name:         "Peer 1",
+		Addresses:    []string{"http://10.0.0.1:8080"},
+		ClusterToken: "tomb-token",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -958,8 +977,9 @@ func TestTombstonePersistenceAndFiltering(t *testing.T) {
 
 	// Simulate heartbeat incoming from peer-1
 	err = mgr.HandleHeartbeat(HeartbeatMessage{
-		NodeID:    "peer-1",
-		Addresses: []string{"http://10.0.0.1:8080"},
+		NodeID:       "peer-1",
+		Addresses:    []string{"http://10.0.0.1:8080"},
+		ClusterToken: "tomb-token",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -970,17 +990,19 @@ func TestTombstonePersistenceAndFiltering(t *testing.T) {
 
 	// Simulate heartbeat from peer-2 containing peer-1 in KnownPeers (PEX gossip)
 	_, err = mgr.HandleHandshake(HandshakeRequest{
-		NodeID:    "peer-2",
-		Name:      "Peer 2",
-		Addresses: []string{"http://10.0.0.2:8080"},
+		NodeID:       "peer-2",
+		Name:         "Peer 2",
+		Addresses:    []string{"http://10.0.0.2:8080"},
+		ClusterToken: "tomb-token",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	err = mgr.HandleHeartbeat(HeartbeatMessage{
-		NodeID:    "peer-2",
-		Addresses: []string{"http://10.0.0.2:8080"},
+		NodeID:       "peer-2",
+		Addresses:    []string{"http://10.0.0.2:8080"},
+		ClusterToken: "tomb-token",
 		KnownPeers: []Node{
 			{ID: "peer-1", Name: "Peer 1", Addresses: []string{"http://10.0.0.1:8080"}},
 		},
@@ -994,7 +1016,7 @@ func TestTombstonePersistenceAndFiltering(t *testing.T) {
 
 	// Test new manager instance restarts with same stacksDir:
 	// peer-1 tombstone should be loaded and peer-1 should not be accepted
-	mgr2 := NewManager(selfNode, "", 10*time.Second, nil, tempDir)
+	mgr2 := NewManager(selfNode, "tomb-token", 10*time.Second, nil, tempDir)
 	mgr2.handlePeerEvent(PeerEvent{
 		Type:      EventDiscovered,
 		NodeID:    "peer-1",
@@ -1023,10 +1045,11 @@ func TestLeaveCluster(t *testing.T) {
 	}))
 	defer server.Close()
 
-	mgr := NewManager(selfNode, "", 10*time.Second, server.Client(), tempDir)
+	mgr := NewManager(selfNode, "leave-token", 10*time.Second, server.Client(), tempDir)
 	_, err := mgr.HandleHandshake(HandshakeRequest{
-		NodeID:    "remote-peer",
-		Addresses: []string{server.URL},
+		NodeID:       "remote-peer",
+		Addresses:    []string{server.URL},
+		ClusterToken: "leave-token",
 	})
 	if err != nil {
 		t.Fatal(err)

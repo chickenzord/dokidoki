@@ -3,6 +3,7 @@ package cluster
 import (
 	"bytes"
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -165,9 +166,16 @@ func (m *Manager) RegisterProvider(p DiscoveryProvider) {
 }
 
 // Start starts all registered providers, the peer event loop, and the TTL eviction timer.
+// If clusterToken is empty, clustering is disabled (standalone mode): discovery providers
+// are not started and incoming peer events will not automatically join.
 func (m *Manager) Start(ctx context.Context) {
 	m.mu.Lock()
 	m.ctx, m.cancel = context.WithCancel(ctx)
+	if m.clusterToken == "" {
+		m.mu.Unlock()
+		slog.Info("Cluster: running in standalone mode (no cluster token set, discovery disabled)")
+		return
+	}
 	providers := make([]DiscoveryProvider, len(m.providers))
 	copy(providers, m.providers)
 	m.mu.Unlock()
@@ -266,6 +274,9 @@ func (m *Manager) isTombstonedLocked(nodeID string) bool {
 }
 
 func (m *Manager) handlePeerEvent(ev PeerEvent) {
+	if m.clusterToken == "" {
+		return
+	}
 	if ev.NodeID == "" || ev.NodeID == m.self.ID {
 		return
 	}
@@ -416,7 +427,10 @@ func (m *Manager) Stop(ctx context.Context) error {
 }
 
 func (m *Manager) validateToken(token string) error {
-	if m.clusterToken != "" && token != m.clusterToken {
+	if m.clusterToken == "" {
+		return ErrInvalidToken
+	}
+	if token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(m.clusterToken)) != 1 {
 		return ErrInvalidToken
 	}
 	return nil
