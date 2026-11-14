@@ -28,6 +28,17 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+
+      - name: Build web assets
+        run: |
+          cd web
+          bun install --frozen-lockfile
+          bun run build
+
       - name: Run tests
         run: go test -v -coverprofile=coverage.out -covermode=atomic ./...
 
