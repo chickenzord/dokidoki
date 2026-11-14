@@ -1,5 +1,10 @@
 export type NodeStatus = 'alive' | 'suspect' | 'offline';
 
+export interface AuthStatus {
+  authenticated: boolean;
+  auth_required: boolean;
+}
+
 export interface Node {
   id: string;
   name: string;

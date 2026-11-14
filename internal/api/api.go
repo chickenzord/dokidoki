@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/chickenzord/dokidoki/internal/compose"
 	"github.com/chickenzord/dokidoki/internal/config"
@@ -31,6 +32,7 @@ type Server struct {
 	selfContainerID string
 	webUI           http.Handler
 	sessionMgr      *SessionManager
+	authMu          sync.RWMutex
 }
 
 // NewServer creates a new API Server instance.
@@ -121,7 +123,8 @@ func (s *Server) userAuthMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		if s.cfg == nil || s.cfg.PasswordHash == "" {
+		pwHash := s.getPasswordHash()
+		if pwHash == "" {
 			if isLoopbackRequest(r) {
 				next.ServeHTTP(w, r)
 				return

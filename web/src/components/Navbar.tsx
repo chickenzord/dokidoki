@@ -4,17 +4,33 @@ import { useNodesQuery } from '../hooks/useClusterData';
 import { Button } from './ui/button';
 import { NodeHealthDot } from './NodeHealthDot';
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuLabel,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from './ui/dropdown-menu';
+import {
   Activity,
   RefreshCw,
   Menu,
   X,
+  Shield,
+  ShieldCheck,
+  KeyRound,
+  LogOut,
 } from 'lucide-react';
+import { AuthStatus } from '../types';
 
 interface NavbarProps {
   onRefresh: () => void;
   isRefreshing?: boolean;
   onToggleMobileSidebar?: () => void;
   isMobileSidebarOpen?: boolean;
+  authStatus?: AuthStatus;
+  onChangePasswordClick?: () => void;
+  onLogoutClick?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -22,6 +38,9 @@ export const Navbar: React.FC<NavbarProps> = ({
   isRefreshing = false,
   onToggleMobileSidebar,
   isMobileSidebarOpen = false,
+  authStatus,
+  onChangePasswordClick,
+  onLogoutClick,
 }) => {
   const { data: nodes = [] } = useNodesQuery();
 
@@ -66,7 +85,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </Link>
         </div>
 
-        {/* Right Controls: Cluster status indicator + Refresh */}
+        {/* Right Controls: Cluster status indicator + Refresh + Auth Menu */}
         <div className="flex items-center gap-3">
           {/* Cluster Status Indicator */}
           <div
@@ -95,6 +114,56 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin text-rose-500' : ''}`} />
           </Button>
+
+          {/* Auth Menu / Controls */}
+          {authStatus && (
+            authStatus.authenticated ? (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="h-8 px-2.5 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-800 text-slate-300 hover:text-white flex items-center gap-1.5"
+                    title="Account / Security"
+                  >
+                    <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                    <span className="text-xs font-medium hidden sm:inline">Admin</span>
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-48 bg-slate-950 border-slate-800 text-slate-200">
+                  <DropdownMenuLabel className="text-xs text-slate-400 font-normal">
+                    Node Security
+                  </DropdownMenuLabel>
+                  <DropdownMenuSeparator className="bg-slate-800" />
+                  <DropdownMenuItem
+                    onClick={onChangePasswordClick}
+                    className="cursor-pointer text-xs focus:bg-slate-900 focus:text-white"
+                  >
+                    <KeyRound className="w-3.5 h-3.5 mr-2 text-rose-400" />
+                    Change Password
+                  </DropdownMenuItem>
+                  <DropdownMenuItem
+                    onClick={onLogoutClick}
+                    className="cursor-pointer text-xs text-rose-400 focus:bg-slate-900 focus:text-rose-300"
+                  >
+                    <LogOut className="w-3.5 h-3.5 mr-2" />
+                    Log Out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            ) : !authStatus.auth_required ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={onChangePasswordClick}
+                className="h-8 px-2.5 rounded-lg border-amber-500/30 bg-amber-500/10 text-amber-300 hover:bg-amber-500/20 hover:text-amber-200 text-xs flex items-center gap-1.5"
+                title="Standalone mode without password. Click to set admin password."
+              >
+                <Shield className="w-3.5 h-3.5 text-amber-400" />
+                <span className="hidden sm:inline">Set Password</span>
+              </Button>
+            ) : null
+          )}
         </div>
       </div>
     </header>

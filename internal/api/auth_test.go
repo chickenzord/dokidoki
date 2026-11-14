@@ -238,3 +238,58 @@ func TestProxyHardening(t *testing.T) {
 	handler.ServeHTTP(w, req)
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+func TestAuthLiveReload(t *testing.T) {
+	tempDir := t.TempDir()
+	cfg := &config.Config{
+		Bind:      "127.0.0.1",
+		Port:      8080,
+		StacksDir: tempDir,
+	}
+
+	server := NewServer(cfg, &mockDocker{}, nil, nil, "")
+	handler := server.Routes()
+
+	// 1. Initially no password -> auth not required
+	req := httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	var meResp map[string]bool
+	err := json.Unmarshal(w.Body.Bytes(), &meResp)
+	require.NoError(t, err)
+	assert.False(t, meResp["auth_required"])
+
+	// 2. Simulate running dokidoki set-password by writing auth.json directly to disk
+	newPw := "liveReloadSecret456!"
+	newHash, err := bcrypt.GenerateFromPassword([]byte(newPw), bcrypt.DefaultCost)
+	require.NoError(t, err)
+
+	authPath := config.AuthFilePath(tempDir)
+	err = config.SaveAuthConfig(authPath, &config.AuthConfig{
+		Version:           1,
+		AdminPasswordHash: string(newHash),
+		ClusterToken:      "live-reloaded-token",
+	})
+	require.NoError(t, err)
+
+	// 3. GET /api/v1/auth/me now detects auth_required without server restart
+	req = httptest.NewRequest(http.MethodGet, "/api/v1/auth/me", nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	err = json.Unmarshal(w.Body.Bytes(), &meResp)
+	require.NoError(t, err)
+	assert.True(t, meResp["auth_required"])
+	assert.False(t, meResp["authenticated"])
+
+	// 4. POST /api/v1/auth/login works immediately with new password
+	loginBody := bytes.NewBufferString(`{"password":"liveReloadSecret456!"}`)
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", loginBody)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+	cookies := w.Result().Cookies()
+	require.NotEmpty(t, cookies)
+	assert.Equal(t, SessionCookieName, cookies[0].Name)
+}

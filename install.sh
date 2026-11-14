@@ -55,6 +55,7 @@ fi
 NODE_NAME="${DOKIDOKI_NODE_NAME:-$CURRENT_HOSTNAME}"
 PEERS="${DOKIDOKI_PEERS:-}"
 CLUSTER_TOKEN="${DOKIDOKI_CLUSTER_TOKEN:-}"
+ADMIN_PASSWORD="${DOKIDOKI_PASSWORD:-}"
 ADVERTISE_ADDR="${DOKIDOKI_ADVERTISE_ADDR:-}"
 ENABLE_MDNS="${DOKIDOKI_ENABLE_MDNS:-true}"
 IMAGE="${DOKIDOKI_IMAGE:-ghcr.io/chickenzord/dokidoki:latest}"
@@ -86,6 +87,7 @@ OPTIONS:
   -s, --stacks-dir <dir>       Directory for Compose stacks (default: /opt/stacks)
   -p, --port <port>            Port to listen on (default: 8080 or next free port)
   -n, --node-name <name>       Node name for the cluster (default: current hostname '${CURRENT_HOSTNAME}')
+      --password <password>    Admin password for Dokidoki web console
       --peers <urls>           Comma-separated bootstrap seed peer URLs
       --token <token>          Cluster security token for authorized peering
       --advertise-addr <urls>  Comma-separated candidate addresses to advertise (default: auto-detected host IP)
@@ -95,8 +97,9 @@ OPTIONS:
   -h, --help                   Show this help message
 
 ENVIRONMENT VARIABLES:
-  DOKIDOKI_STACKS_DIR, DOKIDOKI_PORT, DOKIDOKI_NODE_NAME, DOKIDOKI_PEERS,
-  DOKIDOKI_CLUSTER_TOKEN, DOKIDOKI_ADVERTISE_ADDR, DOKIDOKI_ENABLE_MDNS, DOKIDOKI_IMAGE
+  DOKIDOKI_STACKS_DIR, DOKIDOKI_PORT, DOKIDOKI_NODE_NAME, DOKIDOKI_PASSWORD,
+  DOKIDOKI_PEERS, DOKIDOKI_CLUSTER_TOKEN, DOKIDOKI_ADVERTISE_ADDR,
+  DOKIDOKI_ENABLE_MDNS, DOKIDOKI_IMAGE
 EOF
   exit 0
 }
@@ -125,6 +128,10 @@ while [[ $# -gt 0 ]]; do
       ;;
     -n|--node-name)
       NODE_NAME="$2"
+      shift 2
+      ;;
+    --password)
+      ADMIN_PASSWORD="$2"
       shift 2
       ;;
     --peers)
@@ -181,6 +188,42 @@ prompt_input() {
     echo "$input"
   else
     echo "$current_val"
+  fi
+}
+
+# Helper: prompt user for password input (masked)
+prompt_password() {
+  local prompt_label="$1"
+  local pw=""
+
+  if [ -c /dev/tty ] && exec 3</dev/tty 2>/dev/null; then
+    exec 3<&-
+    printf "${BOLD}%s${RESET}: " "$prompt_label" >/dev/tty
+    stty -echo </dev/tty 2>/dev/null || true
+    read -r pw </dev/tty || true
+    stty echo </dev/tty 2>/dev/null || true
+    printf "\n" >/dev/tty
+  elif [ -t 0 ]; then
+    printf "${BOLD}%s${RESET}: " "$prompt_label"
+    stty -echo 2>/dev/null || true
+    read -r pw || true
+    stty echo 2>/dev/null || true
+    printf "\n"
+  fi
+
+  echo "$pw"
+}
+
+# Helper: generate random hex string
+generate_random_hex() {
+  local bytes="${1:-32}"
+  if command -v openssl >/dev/null 2>&1; then
+    openssl rand -hex "$bytes"
+  elif [ -r /dev/urandom ]; then
+    od -vN "$bytes" -An -tx1 /dev/urandom | tr -d ' \n'
+  else
+    # Fallback to pseudo-random based on time and pid
+    date +%s%N$$ | shasum -a 256 | awk '{print $1}'
   fi
 }
 
@@ -323,6 +366,12 @@ print_summary() {
   if [ -n "$CLUSTER_TOKEN" ]; then
     masked_token="[configured: ${#CLUSTER_TOKEN} chars]"
   fi
+  local pw_display="[not set]"
+  if [ -n "$ADMIN_PASSWORD" ]; then
+    pw_display="[configured]"
+  elif [ "$GENERATED_PASSWORD" = true ]; then
+    pw_display="[auto-generated]"
+  fi
   local peers_display="[none]"
   if [ -n "$PEERS" ]; then
     peers_display="$PEERS"
@@ -342,6 +391,7 @@ print_summary() {
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Stacks Directory" "$STACKS_DIR"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Host Port" "$PORT"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Node Name" "$NODE_NAME"
+  printf "  ${CYAN}%-18s${RESET}: %s\n" "Admin Password" "$pw_display"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Advertised Addr" "$advertise_display"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Docker Socket" "$DOCKER_SOCKET"
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Container Image" "$IMAGE"
@@ -392,6 +442,9 @@ if [ "$PORT_SPECIFIED" = false ]; then
   PORT="$DETECTED_PORT"
 fi
 
+GENERATED_PASSWORD=false
+GENERATED_TOKEN=false
+
 # Interactive configuration prompts if enabled
 if [ "$INTERACTIVE" = true ] && [ "$NON_INTERACTIVE" = false ]; then
   info "Interactive Configuration Setup:"
@@ -401,6 +454,26 @@ if [ "$INTERACTIVE" = true ] && [ "$NON_INTERACTIVE" = false ]; then
     warn "Port $PORT is currently in use by another process."
   fi
   NODE_NAME="$(prompt_input "Node Name" "$NODE_NAME")"
+
+  # Admin Password Prompt
+  echo ""
+  if [ -z "$ADMIN_PASSWORD" ]; then
+    printf "${BOLD}Admin Password Setup:${RESET}\n"
+    printf "  Enter an admin password to secure Dokidoki Web Console.\n"
+    printf "  (Leave blank to auto-generate a secure random password)\n"
+    ENTERED_PW="$(prompt_password "Admin Password")"
+    if [ -n "$ENTERED_PW" ]; then
+      CONFIRM_PW="$(prompt_password "Confirm Admin Password")"
+      if [ "$ENTERED_PW" != "$CONFIRM_PW" ]; then
+        error "Passwords do not match."
+      fi
+      ADMIN_PASSWORD="$ENTERED_PW"
+    else
+      ADMIN_PASSWORD="$(generate_random_hex 16)"
+      GENERATED_PASSWORD=true
+      info "Auto-generated secure admin password."
+    fi
+  fi
 
   echo ""
   printf "${BOLD}Detected Network Interfaces:${RESET}\n"
@@ -421,10 +494,24 @@ if [ "$INTERACTIVE" = true ] && [ "$NON_INTERACTIVE" = false ]; then
 
   SUGGESTED_ADVERTISE="${ADVERTISE_ADDR:-http://${DEFAULT_IP}:${PORT}}"
   ADVERTISE_ADDR="$(prompt_input "Advertised Address (reachable by peers)" "$SUGGESTED_ADVERTISE")"
-  CLUSTER_TOKEN="$(prompt_input "Cluster Security Token (optional)" "$CLUSTER_TOKEN")"
+  
+  # Cluster token: if not set, ask user or generate
+  SUGGESTED_TOKEN="${CLUSTER_TOKEN}"
+  if [ -z "$SUGGESTED_TOKEN" ]; then
+    SUGGESTED_TOKEN="$(generate_random_hex 32)"
+  fi
+  CLUSTER_TOKEN="$(prompt_input "Cluster Security Token" "$SUGGESTED_TOKEN")"
   PEERS="$(prompt_input "Seed Peers (comma-separated, optional)" "$PEERS")"
 else
-  # In non-interactive mode, set default advertise address if not explicitly specified
+  # In non-interactive mode
+  if [ -z "$ADMIN_PASSWORD" ]; then
+    ADMIN_PASSWORD="$(generate_random_hex 16)"
+    GENERATED_PASSWORD=true
+  fi
+  if [ -z "$CLUSTER_TOKEN" ]; then
+    CLUSTER_TOKEN="$(generate_random_hex 32)"
+    GENERATED_TOKEN=true
+  fi
   if [ -z "$ADVERTISE_ADDR" ]; then
     ADVERTISE_ADDR="http://${DEFAULT_IP}:${PORT}"
   fi
@@ -442,19 +529,58 @@ fi
 # Setup target stack directory
 DOKIDOKI_DIR="${STACKS_DIR}/dokidoki"
 COMPOSE_FILE="${DOKIDOKI_DIR}/compose.yaml"
+AUTH_FILE="${STACKS_DIR}/.dokidoki/auth.json"
 
 info "Setting up stack directory at ${DOKIDOKI_DIR}..."
 
 # Create directories (with sudo fallback if needed)
-if ! mkdir -p "$DOKIDOKI_DIR" 2>/dev/null; then
+if ! mkdir -p "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki" 2>/dev/null; then
   warn "Permission denied writing to ${STACKS_DIR}, attempting with sudo..."
-  sudo mkdir -p "$DOKIDOKI_DIR"
-  sudo chown -R "$(id -u):$(id -g)" "$DOKIDOKI_DIR"
+  sudo mkdir -p "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki"
+  sudo chown -R "$(id -u):$(id -g)" "$DOKIDOKI_DIR" "${STACKS_DIR}/.dokidoki"
 fi
 
-success "Directory ready: ${DOKIDOKI_DIR}"
+success "Directories ready: ${DOKIDOKI_DIR} and ${STACKS_DIR}/.dokidoki"
 
-# Build environment entries for compose
+# Create / initialize auth.json
+info "Configuring authentication credentials..."
+if [ -n "$ADMIN_PASSWORD" ]; then
+  # Hash password with bcrypt using dokidoki container
+  docker run --rm -v "${STACKS_DIR}:${STACKS_DIR}" -e DOKIDOKI_STACKS_DIR="${STACKS_DIR}" "${IMAGE}" set-password "$ADMIN_PASSWORD" >/dev/null 2>&1 || {
+    # If container fails or image not locally pulled yet, pull image and retry
+    docker pull "${IMAGE}" >/dev/null 2>&1 || true
+    docker run --rm -v "${STACKS_DIR}:${STACKS_DIR}" -e DOKIDOKI_STACKS_DIR="${STACKS_DIR}" "${IMAGE}" set-password "$ADMIN_PASSWORD" >/dev/null 2>&1 || true
+  }
+fi
+
+# Ensure cluster token is saved in auth.json if present
+if [ -f "$AUTH_FILE" ]; then
+  if command -v python3 >/dev/null 2>&1; then
+    python3 -c "
+import json
+try:
+    with open('$AUTH_FILE', 'r') as f:
+        d = json.load(f)
+except Exception:
+    d = {'version': 1}
+if '$CLUSTER_TOKEN':
+    d['cluster_token'] = '$CLUSTER_TOKEN'
+with open('$AUTH_FILE', 'w') as f:
+    json.dump(d, f, indent=2)
+" 2>/dev/null || true
+  fi
+  chmod 600 "$AUTH_FILE" 2>/dev/null || sudo chmod 600 "$AUTH_FILE" 2>/dev/null || true
+elif [ -n "$CLUSTER_TOKEN" ]; then
+  cat << EOF > "$AUTH_FILE"
+{
+  "version": 1,
+  "cluster_token": "${CLUSTER_TOKEN}"
+}
+EOF
+  chmod 600 "$AUTH_FILE" 2>/dev/null || sudo chmod 600 "$AUTH_FILE" 2>/dev/null || true
+fi
+
+# Build environment entries for compose (secrets kept out of compose.yaml)
 ENV_BLOCK=""
 ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_PORT=${PORT}\n"
 ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_STACKS_DIR=${STACKS_DIR}\n"
@@ -462,10 +588,6 @@ ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_NODE_NAME=${NODE_NAME}\n"
 
 if [ -n "$PEERS" ]; then
   ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_PEERS=${PEERS}\n"
-fi
-
-if [ -n "$CLUSTER_TOKEN" ]; then
-  ENV_BLOCK="${ENV_BLOCK}      - DOKIDOKI_CLUSTER_TOKEN=${CLUSTER_TOKEN}\n"
 fi
 
 if [ -n "$ADVERTISE_ADDR" ]; then
@@ -529,6 +651,12 @@ echo "-------------------------------------------------------------"
 printf "${BOLD}Dokidoki Stack Summary:${RESET}\n"
 printf "  ${CYAN}%-18s${RESET}: http://%s:%s  (or http://localhost:%s)\n" "Web UI URL" "${DEFAULT_IP:-localhost}" "$PORT" "$PORT"
 printf "  ${CYAN}%-18s${RESET}: %s\n" "Node Name" "$NODE_NAME"
+if [ "$GENERATED_PASSWORD" = true ]; then
+  printf "  ${CYAN}%-18s${RESET}: ${YELLOW}${BOLD}%s${RESET} (auto-generated, keep secure!)\n" "Admin Password" "$ADMIN_PASSWORD"
+fi
+if [ "$GENERATED_TOKEN" = true ] || [ -n "$CLUSTER_TOKEN" ]; then
+  printf "  ${CYAN}%-18s${RESET}: ${DIM}%s${RESET}\n" "Cluster Token" "$CLUSTER_TOKEN"
+fi
 if [ -n "$ADVERTISE_ADDR" ]; then
   printf "  ${CYAN}%-18s${RESET}: %s\n" "Advertised Addr" "$ADVERTISE_ADDR"
 fi

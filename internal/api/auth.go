@@ -151,10 +151,57 @@ func (s *Server) isSessionValid(r *http.Request) bool {
 	return s.sessionMgr.VerifySession(cookie.Value)
 }
 
+// checkAndReloadAuth reloads auth.json from disk if it exists and updates s.cfg under authMu.
+func (s *Server) checkAndReloadAuth() {
+	if s.stacksDir == "" {
+		return
+	}
+	authPath := config.AuthFilePath(s.stacksDir)
+	authCfg, err := config.LoadAuthConfig(authPath)
+	if err != nil {
+		return
+	}
+
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.cfg != nil {
+		if authCfg.AdminPasswordHash != "" && s.cfg.PasswordHash != authCfg.AdminPasswordHash {
+			s.cfg.PasswordHash = authCfg.AdminPasswordHash
+		}
+		if authCfg.ClusterToken != "" && s.cfg.ClusterToken != authCfg.ClusterToken {
+			s.cfg.ClusterToken = authCfg.ClusterToken
+			if s.sessionMgr != nil {
+				s.sessionMgr.UpdateSecret(s.cfg.ClusterToken)
+			}
+		}
+	}
+}
+
+// getPasswordHash returns the current configured admin password hash safely under read lock.
+func (s *Server) getPasswordHash() string {
+	s.authMu.RLock()
+	defer s.authMu.RUnlock()
+	if s.cfg == nil {
+		return ""
+	}
+	return s.cfg.PasswordHash
+}
+
+// setPasswordHash updates the configured admin password hash safely under write lock.
+func (s *Server) setPasswordHash(hash string) {
+	s.authMu.Lock()
+	defer s.authMu.Unlock()
+	if s.cfg != nil {
+		s.cfg.PasswordHash = hash
+	}
+}
+
 // handleAuthMe handles GET /api/v1/auth/me (Public)
 // Returns {"authenticated": bool, "auth_required": bool}
 func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
-	authRequired := s.cfg != nil && s.cfg.PasswordHash != ""
+	s.checkAndReloadAuth()
+	pwHash := s.getPasswordHash()
+	authRequired := pwHash != ""
 	authenticated := s.isSessionValid(r)
 
 	writeJSON(w, http.StatusOK, map[string]bool{
@@ -166,12 +213,6 @@ func (s *Server) handleAuthMe(w http.ResponseWriter, r *http.Request) {
 // handleAuthLogin handles POST /api/v1/auth/login (Public)
 // Accepts {"password": "..."}
 func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
-	if s.cfg == nil || s.cfg.PasswordHash == "" {
-		// If no password configured, login is allowed immediately or no-op
-		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "no password configured"})
-		return
-	}
-
 	var req struct {
 		Password string `json:"password"`
 	}
@@ -180,9 +221,31 @@ func (s *Server) handleAuthLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := bcrypt.CompareHashAndPassword([]byte(s.cfg.PasswordHash), []byte(req.Password)); err != nil {
-		writeError(w, http.StatusUnauthorized, "invalid password")
+	pwHash := s.getPasswordHash()
+	if pwHash == "" {
+		// Reload auth in case set-password was executed
+		s.checkAndReloadAuth()
+		pwHash = s.getPasswordHash()
+	}
+
+	if pwHash == "" {
+		// If still no password configured, login is allowed immediately or no-op
+		writeJSON(w, http.StatusOK, map[string]string{"status": "ok", "message": "no password configured"})
 		return
+	}
+
+	if err := bcrypt.CompareHashAndPassword([]byte(pwHash), []byte(req.Password)); err != nil {
+		// If verification failed, check if auth.json changed on disk before rejecting
+		s.checkAndReloadAuth()
+		newPwHash := s.getPasswordHash()
+		if newPwHash != pwHash {
+			pwHash = newPwHash
+			err = bcrypt.CompareHashAndPassword([]byte(pwHash), []byte(req.Password))
+		}
+		if err != nil {
+			writeError(w, http.StatusUnauthorized, "invalid password")
+			return
+		}
 	}
 
 	expiry := time.Now().Add(SessionDuration)
@@ -214,10 +277,16 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	}
 
 	// Verify current password if one is already configured
-	if s.cfg != nil && s.cfg.PasswordHash != "" {
-		if err := bcrypt.CompareHashAndPassword([]byte(s.cfg.PasswordHash), []byte(req.CurrentPassword)); err != nil {
-			writeError(w, http.StatusUnauthorized, "invalid current password")
-			return
+	pwHash := s.getPasswordHash()
+	if pwHash != "" {
+		if err := bcrypt.CompareHashAndPassword([]byte(pwHash), []byte(req.CurrentPassword)); err != nil {
+			// Check if disk changed
+			s.checkAndReloadAuth()
+			pwHash = s.getPasswordHash()
+			if err := bcrypt.CompareHashAndPassword([]byte(pwHash), []byte(req.CurrentPassword)); err != nil {
+				writeError(w, http.StatusUnauthorized, "invalid current password")
+				return
+			}
 		}
 	}
 
@@ -240,9 +309,11 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	}
 
 	authCfg.AdminPasswordHash = string(newHash)
+	s.authMu.RLock()
 	if s.cfg != nil && authCfg.ClusterToken == "" {
 		authCfg.ClusterToken = s.cfg.ClusterToken
 	}
+	s.authMu.RUnlock()
 
 	if err := config.SaveAuthConfig(authPath, authCfg); err != nil {
 		writeError(w, http.StatusInternalServerError, fmt.Sprintf("failed to save auth file: %v", err))
@@ -250,9 +321,7 @@ func (s *Server) handleAuthChangePassword(w http.ResponseWriter, r *http.Request
 	}
 
 	// Update server state
-	if s.cfg != nil {
-		s.cfg.PasswordHash = string(newHash)
-	}
+	s.setPasswordHash(string(newHash))
 
 	// Refresh session cookie for current user
 	expiry := time.Now().Add(SessionDuration)

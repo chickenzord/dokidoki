@@ -1,4 +1,5 @@
 import {
+  AuthStatus,
   HostInfo,
   Node,
   PingResponse,
@@ -23,12 +24,30 @@ export interface RequestOptions extends RequestInit {
 class ApiService {
   private activeEndpoint: string = '';
   private endpointChangeListeners: Array<(endpoint: string) => void> = [];
+  private unauthorizedListeners: Array<() => void> = [];
 
   constructor() {
     // Check localStorage for saved endpoint
     const saved = localStorage.getItem('dokidoki_active_endpoint');
     if (saved) {
       this.activeEndpoint = saved;
+    }
+  }
+
+  public onUnauthorized(listener: () => void): () => void {
+    this.unauthorizedListeners.push(listener);
+    return () => {
+      this.unauthorizedListeners = this.unauthorizedListeners.filter(l => l !== listener);
+    };
+  }
+
+  private notifyUnauthorized() {
+    for (const listener of this.unauthorizedListeners) {
+      try {
+        listener();
+      } catch (e) {
+        console.error('Error in unauthorized listener:', e);
+      }
     }
   }
 
@@ -101,6 +120,7 @@ class ApiService {
 
     try {
       return await fetch(url, {
+        credentials: 'include',
         ...options,
         signal: controller.signal,
         headers: {
@@ -126,6 +146,9 @@ class ApiService {
       const response = await this.fetchWithTimeout(url, options);
 
       if (!response.ok) {
+        if (response.status === 401) {
+          this.notifyUnauthorized();
+        }
         const errorBody = await response.json().catch(() => null);
         const errorMsg = errorBody?.error || `HTTP ${response.status}: ${response.statusText}`;
         throw new Error(errorMsg);
@@ -140,6 +163,9 @@ class ApiService {
         const localUrl = this.resolveUrl(path, '');
         const localResp = await this.fetchWithTimeout(localUrl, options);
         if (!localResp.ok) {
+          if (localResp.status === 401) {
+            this.notifyUnauthorized();
+          }
           throw new Error(`Fallback failed: HTTP ${localResp.status}`);
         }
         return await localResp.json();
@@ -258,10 +284,15 @@ class ApiService {
 
     const response = await fetch(url, {
       method: 'POST',
+      credentials: 'include',
       headers: {
         Accept: onChunk ? 'text/plain' : 'application/json',
       },
     });
+
+    if (response.status === 401) {
+      this.notifyUnauthorized();
+    }
 
     if (!response.ok) {
       const errBody = await response.json().catch(() => null);
@@ -393,6 +424,53 @@ class ApiService {
 
   public async getImage(id: string, customEndpoint?: string, options?: RequestOptions): Promise<any> {
     return this.request<any>(`/api/v1/images/${encodeURIComponent(id)}`, { method: 'GET', ...options }, customEndpoint);
+  }
+
+  // --- Auth ---
+  public async getAuthStatus(customEndpoint?: string, options?: RequestOptions): Promise<AuthStatus> {
+    return this.request<AuthStatus>('/api/v1/auth/me', { method: 'GET', ...options }, customEndpoint);
+  }
+
+  public async login(password: string, customEndpoint?: string, options?: RequestOptions): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      '/api/v1/auth/login',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password }),
+        ...options,
+      },
+      customEndpoint
+    );
+  }
+
+  public async logout(customEndpoint?: string, options?: RequestOptions): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      '/api/v1/auth/logout',
+      {
+        method: 'POST',
+        ...options,
+      },
+      customEndpoint
+    );
+  }
+
+  public async changePassword(
+    currentPassword: string,
+    newPassword: string,
+    customEndpoint?: string,
+    options?: RequestOptions
+  ): Promise<{ status: string }> {
+    return this.request<{ status: string }>(
+      '/api/v1/auth/change-password',
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ current_password: currentPassword, new_password: newPassword }),
+        ...options,
+      },
+      customEndpoint
+    );
   }
 
   // --- Events ---

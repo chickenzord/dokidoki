@@ -1,4 +1,4 @@
-import { useState, createContext, useContext } from 'react';
+import { useState, useEffect, createContext, useContext } from 'react';
 import {
   createRootRoute,
   createRoute,
@@ -7,7 +7,7 @@ import {
   redirect,
   useParams,
 } from '@tanstack/react-router';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClient, QueryClientProvider, useQuery } from '@tanstack/react-query';
 import { Navbar } from './components/Navbar';
 import { TreeSidebar } from './components/TreeSidebar';
 import { Sheet, SheetContent, SheetTitle } from './components/ui/sheet';
@@ -24,6 +24,9 @@ import { NodeContainerDetailRouteComponent } from './pages/NodeContainerDetailRo
 import { useDocumentTitle } from './hooks/useDocumentTitle';
 import { useNodesQuery } from './hooks/useClusterData';
 import { BreadcrumbNav } from './components/BreadcrumbNav';
+import { AuthLockScreen } from './components/AuthLockScreen';
+import { ChangePasswordDialog } from './components/ChangePasswordDialog';
+import { api } from './services/api';
 import { Server, Layers, Box, Network, HardDrive } from 'lucide-react';
 
 export interface ClusterUIContextType {
@@ -51,60 +54,121 @@ export const queryClient = new QueryClient({
   },
 });
 
-function RootComponent() {
+function InnerLayout() {
   const [selectedHostId, setSelectedHostId] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState('');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
+  const [changePasswordOpen, setChangePasswordOpen] = useState(false);
+  const [isAuthLocked, setIsAuthLocked] = useState(false);
+
+  const { data: authStatus, refetch: refetchAuth } = useQuery({
+    queryKey: ['authStatus'],
+    queryFn: () => api.getAuthStatus(),
+    refetchInterval: 15000,
+  });
+
+  // Global 401 handler
+  useEffect(() => {
+    const unsubscribe = api.onUnauthorized(() => {
+      setIsAuthLocked(true);
+      refetchAuth();
+    });
+    return unsubscribe;
+  }, [refetchAuth]);
+
+  // If backend requires auth and user is not authenticated, lock screen
+  const shouldShowLockScreen = isAuthLocked || (authStatus?.auth_required && !authStatus?.authenticated);
 
   const handleRefresh = async () => {
     setIsRefreshing(true);
-    await queryClient.invalidateQueries();
+    await Promise.all([queryClient.invalidateQueries(), refetchAuth()]);
     setTimeout(() => setIsRefreshing(false), 400);
   };
 
+  const handleLoginSuccess = async () => {
+    setIsAuthLocked(false);
+    await refetchAuth();
+    await queryClient.invalidateQueries();
+  };
+
+  const handleLogout = async () => {
+    try {
+      await api.logout();
+    } finally {
+      await refetchAuth();
+      await queryClient.invalidateQueries();
+      setIsAuthLocked(true);
+    }
+  };
+
+  return (
+    <ClusterUIContext.Provider
+      value={{
+        selectedHostId,
+        setSelectedHostId,
+        searchQuery,
+        setSearchQuery,
+      }}
+    >
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-rose-500/20 selection:text-rose-300">
+        <Navbar
+          onRefresh={handleRefresh}
+          isRefreshing={isRefreshing}
+          onToggleMobileSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)}
+          isMobileSidebarOpen={mobileSidebarOpen}
+          authStatus={authStatus}
+          onChangePasswordClick={() => setChangePasswordOpen(true)}
+          onLogoutClick={handleLogout}
+        />
+
+        {/* Main Layout: Sidebar + Route Workspace */}
+        <div className="flex-1 flex overflow-hidden">
+          {/* Desktop Tree Sidebar */}
+          <div className="hidden md:block flex-shrink-0">
+            <TreeSidebar />
+          </div>
+
+          {/* Mobile Sheet Tree Sidebar */}
+          <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
+            <SheetContent side="left" className="p-0 w-72 bg-slate-950 border-r border-slate-800">
+              <SheetTitle className="sr-only">Navigation</SheetTitle>
+              <TreeSidebar onItemClick={() => setMobileSidebarOpen(false)} />
+            </SheetContent>
+          </Sheet>
+
+          {/* Main Content Workspace */}
+          <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 min-w-0">
+            <div className="max-w-7xl mx-auto">
+              <Outlet />
+            </div>
+          </main>
+        </div>
+
+        {/* Auth Lock Screen Modal */}
+        <AuthLockScreen
+          open={!!shouldShowLockScreen}
+          onSuccess={handleLoginSuccess}
+        />
+
+        {/* Change Password Dialog */}
+        <ChangePasswordDialog
+          open={changePasswordOpen}
+          onOpenChange={setChangePasswordOpen}
+          requireCurrentPassword={!!authStatus?.auth_required}
+          onSuccess={async () => {
+            await refetchAuth();
+          }}
+        />
+      </div>
+    </ClusterUIContext.Provider>
+  );
+}
+
+function RootComponent() {
   return (
     <QueryClientProvider client={queryClient}>
-      <ClusterUIContext.Provider
-        value={{
-          selectedHostId,
-          setSelectedHostId,
-          searchQuery,
-          setSearchQuery,
-        }}
-      >
-        <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col font-sans selection:bg-rose-500/20 selection:text-rose-300">
-          <Navbar
-            onRefresh={handleRefresh}
-            isRefreshing={isRefreshing}
-            onToggleMobileSidebar={() => setMobileSidebarOpen(!mobileSidebarOpen)}
-            isMobileSidebarOpen={mobileSidebarOpen}
-          />
-
-          {/* Main Layout: Sidebar + Route Workspace */}
-          <div className="flex-1 flex overflow-hidden">
-            {/* Desktop Tree Sidebar */}
-            <div className="hidden md:block flex-shrink-0">
-              <TreeSidebar />
-            </div>
-
-            {/* Mobile Sheet Tree Sidebar */}
-            <Sheet open={mobileSidebarOpen} onOpenChange={setMobileSidebarOpen}>
-              <SheetContent side="left" className="p-0 w-72 bg-slate-950 border-r border-slate-800">
-                <SheetTitle className="sr-only">Navigation</SheetTitle>
-                <TreeSidebar onItemClick={() => setMobileSidebarOpen(false)} />
-              </SheetContent>
-            </Sheet>
-
-            {/* Main Content Workspace */}
-            <main className="flex-1 overflow-y-auto px-4 sm:px-6 py-6 min-w-0">
-              <div className="max-w-7xl mx-auto">
-                <Outlet />
-              </div>
-            </main>
-          </div>
-        </div>
-      </ClusterUIContext.Provider>
+      <InnerLayout />
     </QueryClientProvider>
   );
 }
