@@ -66,7 +66,7 @@ func NewManager(cfg ManagerConfig, dockerCli docker.Client) *Manager {
 	return &Manager{
 		cfg:        cfg,
 		dockerCli:  dockerCli,
-		httpClient: &http.Client{Timeout: DefaultDownloadTimeout},
+		httpClient: newDownloadHTTPClient(),
 		dlCalls:    make(map[string]*singleflightCall),
 	}
 }
@@ -392,7 +392,10 @@ func (m *Manager) downloadComposeBinary(ctx context.Context, tag, cachedBinPath,
 		return fallbackBin, err
 	}
 
-	_, copyErr := io.Copy(f, resp.Body)
+	idleReader := newIdleTimeoutReader(resp.Body, DefaultIdleTimeout)
+	defer idleReader.Close()
+
+	_, copyErr := io.Copy(f, idleReader)
 	_ = f.Close()
 
 	if copyErr != nil {
