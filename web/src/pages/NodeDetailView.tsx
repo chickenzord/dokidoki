@@ -88,7 +88,7 @@ export const NodeDetailView: React.FC<NodeDetailViewProps> = ({ nodeId }) => {
       <BreadcrumbNav
         items={[
           {
-            label: node.name,
+            label: node.name || (node.id ? node.id.substring(0, 8) : 'Unnamed Node'),
             icon: Server,
           },
         ]}
@@ -100,7 +100,7 @@ export const NodeDetailView: React.FC<NodeDetailViewProps> = ({ nodeId }) => {
           <div className="flex items-center gap-3 pt-1">
             <h1 className="text-xl font-bold text-white flex items-center gap-2">
               <Server className="w-6 h-6 text-emerald-400" />
-              {node.name}
+              {node.name || (node.id ? node.id.substring(0, 8) : 'Unnamed Node')}
             </h1>
             <Badge
               variant="outline"

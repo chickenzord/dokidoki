@@ -119,6 +119,51 @@ func (s *Server) clusterAuthMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// clusterOrUserAuthMiddleware allows requests authenticated by valid cluster token (peer requests)
+// OR by valid user session (human UI requests) with CSRF protection.
+func (s *Server) clusterOrUserAuthMiddleware(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		token := r.Header.Get("X-Cluster-Token")
+		if token == "" {
+			token = r.URL.Query().Get("token")
+		}
+		if token != "" {
+			if s.cfg != nil && s.cfg.ClusterToken != "" && subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.ClusterToken)) == 1 {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeError(w, http.StatusUnauthorized, "invalid cluster token")
+			return
+		}
+
+		if s.isSessionValid(r) {
+			if r.Header.Get("X-Dokidoki-Client") == "" && r.Header.Get("X-Requested-With") == "" {
+				writeError(w, http.StatusForbidden, "missing required CSRF header")
+				return
+			}
+			next.ServeHTTP(w, r)
+			return
+		}
+
+		if s.cfg != nil && s.cfg.ClusterToken != "" {
+			writeError(w, http.StatusUnauthorized, "invalid cluster token")
+			return
+		}
+
+		pwHash := s.getPasswordHash()
+		if pwHash == "" {
+			if isLoopbackRequest(r) {
+				next.ServeHTTP(w, r)
+				return
+			}
+			writeError(w, http.StatusUnauthorized, "authentication required for remote access")
+			return
+		}
+
+		writeError(w, http.StatusUnauthorized, "authentication required")
+	})
+}
+
 // userAuthMiddleware enforces session cookie or loopback access if no password configured.
 func (s *Server) userAuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -195,6 +240,10 @@ func (s *Server) Routes() http.Handler {
 			r.Use(s.clusterAuthMiddleware)
 
 			r.Post("/cluster/leave", s.handleLeave)
+		})
+		r.Group(func(r chi.Router) {
+			r.Use(s.clusterOrUserAuthMiddleware)
+
 			r.Post("/nodes", s.handleAddNode)
 			r.Delete("/nodes/{id}", s.handleDeleteNode)
 		})

@@ -451,3 +451,73 @@ func TestCSRFProtectionMiddleware(t *testing.T) {
 	assert.NotEqual(t, http.StatusForbidden, w.Code)
 }
 
+func TestDeleteNodeAuth(t *testing.T) {
+	tempDir := t.TempDir()
+	token := "cluster-secret-key"
+	password := "adminpass123"
+	hash, err := bcrypt.GenerateFromPassword([]byte(password), bcrypt.DefaultCost)
+	require.NoError(t, err)
+
+	cfg := &config.Config{
+		Bind:         "127.0.0.1",
+		Port:         8080,
+		StacksDir:    tempDir,
+		ClusterToken: token,
+		PasswordHash: string(hash),
+	}
+
+	mockCluster := &mockClusterService{
+		nodes: []cluster.Node{
+			{ID: "self-node", Name: "self", IsSelf: true},
+			{ID: "peer-to-delete", Name: "peer1"},
+		},
+	}
+
+	server := NewServer(cfg, &mockDocker{}, nil, mockCluster, "")
+	handler := server.Routes()
+
+	// 1. Unauthenticated request without token or session -> 401
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-to-delete", nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusUnauthorized, w.Code)
+
+	// 2. Request with valid cluster token (peer machine call) -> 200 OK
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-to-delete", nil)
+	req.Header.Set("X-Cluster-Token", token)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+
+	// Login as user to get session cookie
+	loginBody, _ := json.Marshal(map[string]string{"password": password})
+	req = httptest.NewRequest(http.MethodPost, "/api/v1/auth/login", bytes.NewReader(loginBody))
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var sessionCookie *http.Cookie
+	for _, c := range w.Result().Cookies() {
+		if c.Name == SessionCookieName {
+			sessionCookie = c
+			break
+		}
+	}
+	require.NotNil(t, sessionCookie)
+
+	// 3. User session without CSRF header -> 403 Forbidden
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-to-delete", nil)
+	req.AddCookie(sessionCookie)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusForbidden, w.Code)
+
+	// 4. User session WITH CSRF header (normal UI action) -> 200 OK without providing cluster token
+	req = httptest.NewRequest(http.MethodDelete, "/api/v1/nodes/peer-to-delete", nil)
+	req.AddCookie(sessionCookie)
+	req.Header.Set("X-Dokidoki-Client", "web")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+

@@ -145,7 +145,7 @@ export const ClusterNodesView: React.FC = () => {
                           params={{ nodeId: node.id }}
                           className="font-semibold text-slate-100 hover:text-rose-400 transition-colors"
                         >
-                          {node.name}
+                          {node.name || <span className="italic text-slate-400 font-mono">Unnamed ({node.id.substring(0, 8)})</span>}
                         </Link>
                         {node.is_self && (
                           <Badge variant="outline" className="text-[10px] bg-slate-800 text-slate-300 border-slate-700 font-mono">
@@ -248,12 +248,12 @@ export const ClusterNodesView: React.FC = () => {
             <DialogDescription className="text-xs text-slate-400 mt-2">
               {targetNode?.is_self ? (
                 <>
-                  This will detach this node (<span className="text-slate-200 font-mono font-medium">{targetNode?.name}</span>) from the cluster and reset it to standalone mode. Local stacks remain unaffected.
+                  This will detach this node (<span className="text-slate-200 font-mono font-medium">{targetNode?.name || '(unnamed node)'}</span>) from the cluster and reset it to standalone mode. Local stacks remain unaffected.
                 </>
               ) : (
                 <>
                   Are you sure you want to remove node{' '}
-                  <span className="text-slate-200 font-mono font-medium">{targetNode?.name}</span> ({targetNode?.id}) from the cluster? It will be marked with a tombstone to prevent resurrection.
+                  <span className="text-slate-200 font-mono font-medium">{targetNode?.name || '(unnamed node)'}</span> ({targetNode?.id}) from the cluster? It will be marked with a tombstone to prevent resurrection.
                 </>
               )}
             </DialogDescription>
